@@ -30,7 +30,7 @@ class DataFetcher:
         在应用启动时，触发下载并加载特定时间点的数据。
         (已更新，对下载器的返回值进行健壮性检查)
         """
-        target_time_utc = datetime.now(timezone.utc) + timedelta(hours=9)
+        target_time_utc = datetime.now(timezone.utc) + timedelta(hours=8)
         logger.info(f"正在为目标时间 {target_time_utc.isoformat()} 触发 GRIB 数据下载...")
         
         # 调用下载器，它总是返回一个2元素的元组
