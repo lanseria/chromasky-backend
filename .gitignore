@@ -2,3 +2,4 @@ grib_data
 ai/project_context.txt
 .DS_Store
 __pycache__
+frontend/map_data.json
