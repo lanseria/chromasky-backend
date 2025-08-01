@@ -9,6 +9,7 @@ from typing import Dict, Literal
 from zoneinfo import ZoneInfo
 import ephem
 import math
+import pandas as pd
 
 # 确保 grib_downloader 被导入，以便我们能使用它的 DOWNLOAD_DIR
 from .grib_downloader import grib_downloader
@@ -206,16 +207,61 @@ class DataFetcher:
             return None
     
     def get_aod_for_event(self, lat: float, lon: float, event: EventType) -> float | None:
-        if self.aod_dataset is None: return None
+        """
+        为给定的事件，从 AOD 数据集中获取最接近的 AOD 值。
+        (最终修复版：精确匹配 step 坐标的数据类型)
+        """
+        if self.aod_dataset is None:
+            return None
+
         gfs_meta = self.gfs_time_metadata.get(event)
-        if not gfs_meta: return None
-        target_time = datetime.fromisoformat(gfs_meta["forecast_time_utc"])
+        if not gfs_meta:
+            logger.warning(f"事件 '{event}' 的 GFS 时间元数据缺失，无法匹配 AOD 时间。")
+            return None
+        
+        target_time_utc = datetime.fromisoformat(gfs_meta["forecast_time_utc"])
+
         try:
+            if 'time' in self.aod_dataset.coords:
+                naive_base_time = pd.to_datetime(self.aod_dataset.time.values).to_pydatetime()
+                aod_base_time_utc = naive_base_time.replace(tzinfo=timezone.utc)
+            else:
+                logger.error("AOD 数据集中未找到 'time' 坐标，无法确定起报时间。")
+                return None
+            
+            # --- START OF FINAL FIX ---
+            
+            # 1. 计算目标时间相对于 AOD 起报时间的时间差 (timedelta)
+            target_timedelta = target_time_utc - aod_base_time_utc
+
+            # 2. 将 timedelta 转换为与 'step' 坐标单位匹配的数字。
+            #    CAMS GRIB 文件中的 step 单位几乎总是小时。
+            #    我们将其转换为浮点数小时。
+            target_step_hours = target_timedelta.total_seconds() / 3600.0
+            
             lon_360 = lon + 360 if lon < 0 else lon
-            aod_point_data = self.aod_dataset.sel(latitude=lat, longitude=lon_360, time=target_time, method="nearest")
-            return to_python_float(aod_point_data.get("aod550", np.nan))
+            
+            # 3. 使用浮点数小时，在 'step' 维度上进行索引
+            #    xarray 会找到坐标值中最接近 target_step_hours 的点。
+            aod_point_data = self.aod_dataset.sel(
+                latitude=lat,
+                longitude=lon_360,
+                step=target_step_hours,
+                method="nearest"
+            )
+            
+            # --- END OF FINAL FIX ---
+            
+            aod_value = to_python_float(aod_point_data.get("aod550", np.nan))
+            
+            if np.isnan(aod_value):
+                logger.warning(f"在 AOD 数据集中未能找到变量 'aod550'。")
+                return None
+
+            return aod_value
+            
         except Exception as e:
-            logger.error(f"提取 AOD 时出错: {e}")
+            logger.error(f"为事件 '{event}' 提取 AOD 时发生未知错误: {e}", exc_info=True)
             return None
         
     def get_all_variables_for_point(self, lat: float, lon: float, event: EventType):

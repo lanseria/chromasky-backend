@@ -83,38 +83,47 @@ def check_data_for_point(
 
 @router.get("/")
 def get_chromasky_index(
+    event: EventType = Query(
+        default="today_sunset",
+        description="选择要查询的预报事件"
+    ),
     lat: float = Query(
-        default=31.23,  # 这是参数的默认值
+        default=31.23,
         description="纬度 (Latitude)",
-        ge=-90,         # ge = Greater than or equal to
-        le=90           # le = Less than or equal to
+        ge=-90,
+        le=90
     ),
     lon: float = Query(
-        default=121.47, # 这是参数的默认值
+        default=121.47,
         description="经度 (Longitude)",
         ge=-180,
-        le=360          # 允许 0-360 和 -180-180 两种范围
+        le=360
     )
 ):
     """
-    获取指定经纬度的ChromaSky指数。
-    (这是V1的模拟实现)
+    获取指定经纬度和事件的ChromaSky指数和详细分项得分。
     """
-    # TODO: 在 app/services 中实现真实的计算逻辑
-    # 真实的逻辑会调用服务来计算得分
+    # 1. 获取所有必需的原始数据
+    raw_gfs_data = data_fetcher.get_all_variables_for_point(lat=lat, lon=lon, event=event)
+    if "error" in raw_gfs_data:
+        raise HTTPException(status_code=404, detail=raw_gfs_data["error"])
+
+    aod_value = data_fetcher.get_aod_for_event(lat=lat, lon=lon, event=event)
+    avg_cloud_path = data_fetcher.get_light_path_avg_cloudiness(lat=lat, lon=lon, event=event)
     
-    # 模拟返回数据
-    score = 8.5
-    breakdown = {
-        "local_clouds": 0.9,  # 因子A
-        "light_path": 0.95,   # 因子B
-        "air_quality": 1.0,   # 因子C
-        "cloud_altitude": 0.7 # 因子D
-    }
+    # 2. 调用计算器服务来计算最终得分和分项
+    calculation_result = calculator.calculate_final_score(
+        raw_gfs_data=raw_gfs_data,
+        aod_value=aod_value,
+        avg_cloud_path=avg_cloud_path
+    )
+    
+    # 3. 组合最终的 API 响应
+    gfs_time_info = data_fetcher.gfs_time_metadata.get(event)
     
     return {
         "location": {"lat": lat, "lon": lon},
-        "chromasky_score": score,
-        "breakdown": breakdown,
-        "recommendation": "Excellent potential for a spectacular sunset!"
+        "event": event,
+        "time_info": {"gfs_forecast": gfs_time_info},
+        **calculation_result # 使用字典解包合并得分和分项
     }
