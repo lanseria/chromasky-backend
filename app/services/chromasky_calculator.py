@@ -23,6 +23,18 @@ def score_light_path(avg_tcc_along_path: float | None) -> float:
     clarity = (100.0 - avg_tcc_along_path) / 100.0
     return clarity ** 2
 
+def score_air_quality(aod: float | None) -> float:
+    """因子C: 空气质量 (The Filter)"""
+    # 如果 AOD 数据缺失，给一个中等偏下的惩罚分
+    if aod is None or np.isnan(aod):
+        return 0.5 
+    
+    if aod < 0.2:
+        return 1.0
+    if aod > 0.8:
+        return 0.0
+    return 1.0 - ((aod - 0.2) / 0.6)
+
 def score_cloud_altitude(cloud_base_meters: float | None) -> float:
     """因子D: 云层高度 (The Scale)"""
     if cloud_base_meters is None or np.isnan(cloud_base_meters): # 没有云或数据缺失

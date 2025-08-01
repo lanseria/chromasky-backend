@@ -27,29 +27,20 @@ EventType = Literal["today_sunrise", "today_sunset", "tomorrow_sunrise", "tomorr
 
 # --- DataFetcher 类 ---
 class DataFetcher:
-    """
-    负责从磁盘加载由 scheduler.py 准备好的、多个事件的预报数据。
-    """
     def __init__(self, load_data: bool = True):
-        self.datasets: Dict[EventType, xr.Dataset] = {}
-        self.time_metadata: Dict[EventType, dict] = {}
+        self.gfs_datasets: Dict[EventType, xr.Dataset] = {}
+        self.gfs_time_metadata: Dict[EventType, dict] = {}
+        self.aod_dataset: xr.Dataset | None = None
+        self.aod_time_metadata: dict = {}
         
         if load_data:
             self._load_all_data_from_disk()
 
-    def _find_latest_manifest(self) -> Path | None:
-        """在grib_data目录中查找最新的 manifest.json 文件。"""
+    def _find_latest_manifest(self, pattern: str) -> Path | None:
         manifest_dir = grib_downloader.download_dir
-        if not manifest_dir.exists():
-            return None
-        
-        # 使用 glob 查找所有清单文件，并按名称排序（名称中包含了日期和小时）
-        manifest_files = sorted(manifest_dir.glob("manifest_*.json"), reverse=True)
-        
-        if not manifest_files:
-            return None
-        
-        return manifest_files[0] # 返回最新的一个
+        if not manifest_dir.exists(): return None
+        manifest_files = sorted(manifest_dir.rglob(pattern), reverse=True)
+        return manifest_files[0] if manifest_files else None
 
     def _calculate_target_times(self) -> Dict[EventType, datetime]:
         """计算出所有四个目标事件的UTC时间。"""
@@ -70,67 +61,71 @@ class DataFetcher:
 
     def _load_all_data_from_disk(self):
         """
-        在应用启动时，查找最新的清单文件，并加载其中描述的所有GRIB数据。
+        在应用启动时，加载最新的 GFS 和 AOD 数据。
         """
-        latest_manifest_path = self._find_latest_manifest()
-        
-        if not latest_manifest_path:
-            logger.error(f"在 {grib_downloader.download_dir} 中未找到任何数据清单文件。请先运行 scheduler.py。")
-            return
-
-        logger.info(f"正在从最新的清单文件加载数据: {latest_manifest_path.name}")
-        with open(latest_manifest_path, 'r') as f:
-            try:
-                manifest = json.load(f)
-            except json.JSONDecodeError:
-                logger.error(f"无法解析数据清单文件: {self.manifest_path}。文件可能已损坏或为空。")
-                return
-            
-        for event_name, data in manifest.items():
-            logger.info(f"--- 正在为事件 '{event_name}' 加载数据 ---")
-            
-            # 确保 manifest 结构正确
-            if "time_meta" not in data or "file_paths" not in data:
-                logger.warning(f"清单中事件 '{event_name}' 的条目格式不正确，已跳过。")
-                continue
-
-            self.time_metadata[event_name] = data["time_meta"]
-            file_paths = data["file_paths"]
-            
-            datasets_to_merge = []
-            
-            # 遍历该事件所需的所有数据块文件
-            for block_name, path_str in file_paths.items():
-                path = Path(path_str)
-                if path.exists():
-                    try:
-                        # 定义通用的加载参数，以消除警告
-                        open_kwargs = {"engine": "cfgrib", "decode_timedelta": False}
-                        # 定义额外的过滤条件，以处理 stepType 冲突
-                        backend_kwargs = {'filter_by_keys': {'stepType': 'instant'}}
-                        
+        # 1. 加载 GFS 数据
+        latest_gfs_manifest_path = self._find_latest_manifest("manifest_*.json")
+        if latest_gfs_manifest_path:
+            logger.info(f"正在从 GFS 清单加载: {latest_gfs_manifest_path.name}")
+            with open(latest_gfs_manifest_path, 'r') as f:
+                gfs_manifest = json.load(f)
+            for event_name, data in gfs_manifest.items():
+                self.gfs_time_metadata[event_name] = data["time_meta"]
+                file_paths = data["file_paths"]
+                
+                datasets_to_merge = []
+                
+                # 遍历该事件所需的所有数据块文件
+                for block_name, path_str in file_paths.items():
+                    path = Path(path_str)
+                    if path.exists():
                         try:
-                            ds = xr.open_dataset(path, **open_kwargs, backend_kwargs=backend_kwargs)
-                        except (ValueError, KeyError):
-                            # 如果按 stepType='instant' 过滤失败，回退到不带过滤的加载方式
-                            logger.warning(f"文件 {path} 按 stepType='instant' 加载失败，尝试无 stepType 加载...")
-                            ds = xr.open_dataset(path, **open_kwargs)
+                            # 定义通用的加载参数，以消除警告
+                            open_kwargs = {"engine": "cfgrib", "decode_timedelta": False}
+                            # 定义额外的过滤条件，以处理 stepType 冲突
+                            backend_kwargs = {'filter_by_keys': {'stepType': 'instant'}}
                             
-                        datasets_to_merge.append(ds)
-                        logger.info(f"  > 成功加载文件: {path.name}")
+                            try:
+                                ds = xr.open_dataset(path, **open_kwargs, backend_kwargs=backend_kwargs)
+                            except (ValueError, KeyError):
+                                # 如果按 stepType='instant' 过滤失败，回退到不带过滤的加载方式
+                                logger.warning(f"文件 {path} 按 stepType='instant' 加载失败，尝试无 stepType 加载...")
+                                ds = xr.open_dataset(path, **open_kwargs)
+                                
+                            datasets_to_merge.append(ds)
+                            logger.info(f"  > 成功加载文件: {path.name}")
 
-                    except Exception as e:
-                        logger.error(f"  > 加载文件 {path.name} (用于事件 {event_name}) 时发生严重错误: {e}", exc_info=True)
+                        except Exception as e:
+                            logger.error(f"  > 加载文件 {path.name} (用于事件 {event_name}) 时发生严重错误: {e}", exc_info=True)
+                    else:
+                        logger.warning(f"  > 文件未找到，已跳过: {path}")
+                
+                if datasets_to_merge:
+                    # 使用 xr.merge 合并该事件的所有数据块
+                    self.gfs_datasets[event_name] = xr.merge(datasets_to_merge)
+                    logger.info(f"==> 事件 '{event_name}' 的数据集已成功加载并缓存。")
                 else:
-                    logger.warning(f"  > 文件未找到，已跳过: {path}")
-            
-            if datasets_to_merge:
-                # 使用 xr.merge 合并该事件的所有数据块
-                self.datasets[event_name] = xr.merge(datasets_to_merge)
-                logger.info(f"==> 事件 '{event_name}' 的数据集已成功加载并缓存。")
-            else:
-                logger.error(f"事件 '{event_name}' 没有可加载的数据文件。")
+                    logger.error(f"事件 '{event_name}' 没有可加载的数据文件。")
+        else:
+            logger.error("未找到 GFS 数据清单。")
 
+        # 2. 加载 AOD 数据
+        latest_aod_manifest_path = self._find_latest_manifest("cams_aod/*/manifest_aod.json")
+        if latest_aod_manifest_path:
+            logger.info(f"正在从 AOD 清单加载: {latest_aod_manifest_path.name}")
+            with open(latest_aod_manifest_path, 'r') as f:
+                aod_manifest = json.load(f)
+            self.aod_time_metadata = aod_manifest
+            aod_file_path = Path(aod_manifest["file_path"])
+            if aod_file_path.exists():
+                try:
+                    self.aod_dataset = xr.open_dataset(aod_file_path, engine="cfgrib", decode_timedelta=False)
+                    logger.info("==> AOD 数据集已成功加载并缓存。")
+                except Exception as e:
+                    logger.error(f"加载 AOD 文件失败: {e}")
+        else:
+            logger.warning("未找到 AOD 数据清单。")
+        
     def _get_sun_azimuth(self, lat: float, lon: float, event_time_utc: datetime) -> float:
         """使用 ephem 计算给定地点和时间的太阳方位角。"""
         observer = ephem.Observer()
@@ -175,8 +170,8 @@ class DataFetcher:
         """
         计算光照路径上的平均总云量。
         """
-        dataset = self.datasets.get(event)
-        time_meta = self.time_metadata.get(event)
+        dataset = self.gfs_datasets.get(event)
+        time_meta = self.gfs_time_metadata.get(event)
         if dataset is None or time_meta is None:
             return None
 
@@ -209,14 +204,26 @@ class DataFetcher:
         except Exception as e:
             logger.error(f"计算光路云量时出错: {e}", exc_info=True)
             return None
-
+    
+    def get_aod_for_event(self, lat: float, lon: float, event: EventType) -> float | None:
+        if self.aod_dataset is None: return None
+        gfs_meta = self.gfs_time_metadata.get(event)
+        if not gfs_meta: return None
+        target_time = datetime.fromisoformat(gfs_meta["forecast_time_utc"])
+        try:
+            lon_360 = lon + 360 if lon < 0 else lon
+            aod_point_data = self.aod_dataset.sel(latitude=lat, longitude=lon_360, time=target_time, method="nearest")
+            return to_python_float(aod_point_data.get("aod550", np.nan))
+        except Exception as e:
+            logger.error(f"提取 AOD 时出错: {e}")
+            return None
+        
     def get_all_variables_for_point(self, lat: float, lon: float, event: EventType):
         """
         负责提取单点数据
         """
-        dataset = self.datasets.get(event)
-        if dataset is None:
-            return {"error": f"事件 '{event}' 的数据尚未加载或加载失败。"}
+        dataset = self.gfs_datasets.get(event)
+        if dataset is None: return {"error": f"事件 '{event}' 的 GFS 数据不可用。"}
 
         try:
             lon_360 = lon + 360 if lon < 0 else lon
@@ -229,6 +236,8 @@ class DataFetcher:
             low_cloud_cover = to_python_float(point_data.get("lcc", np.nan))
 
             cloud_base_height_meters = to_python_float(point_data.get("gh", np.nan))
+
+            real_aod = self.get_aod_for_event(lat, lon, event)
             
             return {
                 "total_cloud_cover": round(total_cloud_cover, 2) if not np.isnan(total_cloud_cover) else None,
@@ -236,6 +245,7 @@ class DataFetcher:
                 "medium_cloud_cover": round(medium_cloud_cover, 2) if not np.isnan(medium_cloud_cover) else None,
                 "low_cloud_cover": round(low_cloud_cover, 2) if not np.isnan(low_cloud_cover) else None,
                 "cloud_base_height_meters": round(cloud_base_height_meters, 2) if not np.isnan(cloud_base_height_meters) else None,
+                "aod": round(real_aod, 3) if real_aod is not None else None,
             }
 
         except Exception as e:
