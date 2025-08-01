@@ -3,35 +3,16 @@ import requests
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from app.core.download_config import GFS_BASE_URL, GFS_DATA_BLOCKS, SUBREGION_PARAMS, DOWNLOAD_DIR
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- 配置区域 ---
-# 从您的URL中提取的固定配置
-BASE_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
-SUBREGION_PARAMS = {
-    "subregion": "",
-    "toplat": 55,
-    "leftlon": 100,
-    "rightlon": 135,
-    "bottomlat": 15
-}
-# 定义我们需要的每个数据块
-DATA_BLOCKS = {
-    "total_cloud": {"vars": ["TCDC"], "levels": ["entire_atmosphere"]},
-    "cloud_layers": {"vars": ["LCDC", "MCDC", "HCDC"], "levels": ["low_cloud_layer", "middle_cloud_layer", "high_cloud_layer"]},
-    "visibility": {"vars": ["VIS"], "levels": ["surface"]}
-}
-# 数据将保存到这个目录
-DOWNLOAD_DIR = Path("grib_data")
 class GribDownloader:
     """
     负责从 NOAA NOMADS 自动下载 GFS GRIB 数据。
-    (已更新为健壮的最新周期查找逻辑)
     """
     def __init__(self, download_dir: Path = DOWNLOAD_DIR):
-        # download_dir 现在是根目录
         self.download_dir = download_dir
         self.download_dir.mkdir(parents=True, exist_ok=True)
 
@@ -47,7 +28,7 @@ class GribDownloader:
             params[f"lev_{level}"] = "on"
         
         req = requests.models.PreparedRequest()
-        req.prepare_url(BASE_URL, params)
+        req.prepare_url(GFS_BASE_URL, params)
         return req.url
 
     def get_gfs_data_for_time(self, run_info: dict, target_time_utc: datetime, event_name: str):
@@ -87,14 +68,13 @@ class GribDownloader:
 
         downloaded_paths = {}
         
-        for block_name, config in DATA_BLOCKS.items():
+        for block_name, config in GFS_DATA_BLOCKS.items():
             url = self._build_url(run_info, forecast_hour, config)
             # 2. 修改输出路径，文件名现在是固定的，放在新的目录里
             output_path = output_dir / f"{block_name}.grib2"
             
             logger.info(f"正在下载 {block_name} 数据 (f{forecast_hour:03d})...")
             try:
-                # ... (下载和保存文件的逻辑不变) ...
                 response = requests.get(url, stream=True, timeout=300)
                 response.raise_for_status()
                 with open(output_path, "wb") as f:

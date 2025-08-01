@@ -1,6 +1,7 @@
 # app/api/v1/endpoints/chromasky.py
 from fastapi import APIRouter, HTTPException, Query
-from app.services.data_fetcher import data_fetcher, EventType  # 导入我们的数据获取器单例
+from app.services.data_fetcher import data_fetcher, EventType
+from app.services import chromasky_calculator as calculator
 
 router = APIRouter()
 
@@ -24,22 +25,46 @@ def check_data_for_point(
     )
 ):
     """
-    一个用于调试的端点，检查能为指定经纬度获取到哪些原始数据。
+    一个用于调试的端点，返回原始数据以及计算出的因子得分。
     """
-    # 调用服务来获取数据
-    variables = data_fetcher.get_all_variables_for_point(lat=lat, lon=lon, event=event)
-    
-    if "error" in variables:
-        raise HTTPException(status_code=404, detail=variables["error"])
+    # 1. 获取本地的原始数据
+    raw_data = data_fetcher.get_all_variables_for_point(lat=lat, lon=lon, event=event)
+    if "error" in raw_data:
+        raise HTTPException(status_code=404, detail=raw_data["error"])
         
+    # 2. 计算光路上的平均云量 (因子B的输入)
+    avg_cloud_path = data_fetcher.get_light_path_avg_cloudiness(lat=lat, lon=lon, event=event)
+
+    # 3. 计算各个因子的得分
+    factor_a_score = calculator.score_local_clouds(
+        raw_data.get("high_cloud_cover"), raw_data.get("medium_cloud_cover")
+    )
+    factor_b_score = calculator.score_light_path(avg_cloud_path)
+    factor_d_score = calculator.score_cloud_altitude(raw_data.get("cloud_base_height_meters"))
+    
     # 从 data_fetcher 实例中获取对应事件的时间元数据
     time_info = data_fetcher.time_metadata.get(event)
     
     return {
-        "message": f"成功获取事件 '{event}' 的原始数据",
+        "message": f"成功获取事件 '{event}' 的原始数据及因子得分",
         "time_info": time_info,
         "location": {"lat": lat, "lon": lon},
-        "data": variables
+        "raw_data": raw_data,
+        "calculated_factors": {
+            "factor_A_local_clouds": {
+                "score": round(factor_a_score, 2),
+                "input_hcc": raw_data.get("high_cloud_cover"),
+                "input_mcc": raw_data.get("medium_cloud_cover"),
+            },
+            "factor_B_light_path": {
+                "score": round(factor_b_score, 2),
+                "input_avg_tcc_along_path": round(avg_cloud_path, 2) if avg_cloud_path is not None else None,
+            },
+            "factor_D_cloud_altitude": {
+                "score": round(factor_d_score, 2),
+                "input_cloud_base_meters": raw_data.get("cloud_base_height_meters"),
+            }
+        }
     }
 
 @router.get("/")

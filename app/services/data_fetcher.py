@@ -7,6 +7,8 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Literal
 from zoneinfo import ZoneInfo
+import ephem
+import math
 
 # 确保 grib_downloader 被导入，以便我们能使用它的 DOWNLOAD_DIR
 from .grib_downloader import grib_downloader
@@ -97,7 +99,6 @@ class DataFetcher:
             
             datasets_to_merge = []
             
-            # --- START OF MISSING CODE ---
             # 遍历该事件所需的所有数据块文件
             for block_name, path_str in file_paths.items():
                 path = Path(path_str)
@@ -122,7 +123,6 @@ class DataFetcher:
                         logger.error(f"  > 加载文件 {path.name} (用于事件 {event_name}) 时发生严重错误: {e}", exc_info=True)
                 else:
                     logger.warning(f"  > 文件未找到，已跳过: {path}")
-            # --- END OF MISSING CODE ---
             
             if datasets_to_merge:
                 # 使用 xr.merge 合并该事件的所有数据块
@@ -131,9 +131,88 @@ class DataFetcher:
             else:
                 logger.error(f"事件 '{event_name}' 没有可加载的数据文件。")
 
+    def _get_sun_azimuth(self, lat: float, lon: float, event_time_utc: datetime) -> float:
+        """使用 ephem 计算给定地点和时间的太阳方位角。"""
+        observer = ephem.Observer()
+        observer.lat = str(lat)
+        observer.lon = str(lon)
+        observer.date = event_time_utc
+        observer.pressure = 0 # 忽略大气折射效应
+        observer.epoch = ephem.J2000
+
+        sun = ephem.Sun(observer)
+        
+        # 方位角 (Azimuth) 以度为单位，从北点顺时针测量
+        # 我们需要的是光路方向，对于日落是方位角+180度，对于日出是方位角本身
+        # 但为了简化，我们统一使用方位角，因为光路是双向的
+        # 为了回溯，我们需要的是太阳来的方向，即方位角 + 180度
+        # 但通常方位角指的是太阳在天空的位置，光线从那里来
+        # 日落时，太阳在西方 (约270度)，光线从270度方向来
+        # 我们要扫描的是270度方向，所以直接用azimuth
+        return math.degrees(sun.az)
+
+    def _get_point_along_path(self, lat1: float, lon1: float, azimuth_deg: float, distance_km: float) -> tuple[float, float]:
+        """计算从一个点沿着指定方位角移动一定距离后的新点坐标。"""
+        R = 6371.0  # 地球平均半径 (km)
+        lat1_rad = math.radians(lat1)
+        lon1_rad = math.radians(lon1)
+        azimuth_rad = math.radians(azimuth_deg)
+
+        d_div_R = distance_km / R
+
+        lat2_rad = math.asin(
+            math.sin(lat1_rad) * math.cos(d_div_R) +
+            math.cos(lat1_rad) * math.sin(d_div_R) * math.cos(azimuth_rad)
+        )
+        lon2_rad = lon1_rad + math.atan2(
+            math.sin(azimuth_rad) * math.sin(d_div_R) * math.cos(lat1_rad),
+            math.cos(d_div_R) - math.sin(lat1_rad) * math.sin(lat2_rad)
+        )
+        
+        return math.degrees(lat2_rad), math.degrees(lon2_rad)
+
+    def get_light_path_avg_cloudiness(self, lat: float, lon: float, event: EventType) -> float | None:
+        """
+        计算光照路径上的平均总云量。
+        """
+        dataset = self.datasets.get(event)
+        time_meta = self.time_metadata.get(event)
+        if dataset is None or time_meta is None:
+            return None
+
+        try:
+            event_time_utc = datetime.fromisoformat(time_meta["forecast_time_utc"])
+            sun_azimuth = self._get_sun_azimuth(lat, lon, event_time_utc)
+            
+            # 沿着光路回溯，采样 N 个点
+            path_cloudiness = []
+            num_samples = 5
+            scan_distance_km = 400
+
+            for i in range(1, num_samples + 1):
+                distance = (i / num_samples) * scan_distance_km
+                sample_lat, sample_lon = self._get_point_along_path(lat, lon, sun_azimuth, distance)
+                
+                # 从数据集中提取该采样点的总云量
+                lon_360 = sample_lon + 360 if sample_lon < 0 else sample_lon
+                point_data = dataset.sel(latitude=sample_lat, longitude=lon_360, method="nearest")
+                tcc = to_python_float(point_data.get("tcc", np.nan))
+                
+                if not np.isnan(tcc):
+                    path_cloudiness.append(tcc)
+            
+            if not path_cloudiness:
+                return None # 所有采样点都无数据
+
+            return np.mean(path_cloudiness)
+            
+        except Exception as e:
+            logger.error(f"计算光路云量时出错: {e}", exc_info=True)
+            return None
+
     def get_all_variables_for_point(self, lat: float, lon: float, event: EventType):
         """
-        为给定的经纬度和事件，从缓存中提取变量。
+        负责提取单点数据
         """
         dataset = self.datasets.get(event)
         if dataset is None:
@@ -143,38 +222,19 @@ class DataFetcher:
             lon_360 = lon + 360 if lon < 0 else lon
             point_data = dataset.sel(latitude=lat, longitude=lon_360, method="nearest")
             
-            # --- 这里的数据提取逻辑需要与 grib_downloader.py 中的 DATA_BLOCKS 保持同步 ---
-            total_cloud_cover = to_python_float(point_data.get("tcdc", np.nan))
+            total_cloud_cover = to_python_float(point_data.get("tcc", np.nan))
+            
             high_cloud_cover = to_python_float(point_data.get("hcc", np.nan))
             medium_cloud_cover = to_python_float(point_data.get("mcc", np.nan))
             low_cloud_cover = to_python_float(point_data.get("lcc", np.nan))
-            visibility = to_python_float(point_data.get("vis", np.nan))
+
+            cloud_base_height_meters = to_python_float(point_data.get("gh", np.nan))
             
-            # AOD 估算
-            approximated_aod = 0.2 # 默认值
-            if not np.isnan(visibility):
-                vis_km = visibility / 1000
-                approximated_aod = max(0.1, min(1.0, -0.04 * vis_km + 1.0))
-            else:
-                logger.warning(f"事件 '{event}' 的能见度数据不可用，AOD使用默认值0.2")
-
-            # 云底高度估算 (需要确保 geopotential_height 数据块已下载)
-            gh_data = point_data.get("gh")
-            cloud_base_height_meters = np.nan
-            if gh_data is not None:
-                # 这里的逻辑需要根据您下载的GH数据结构来定
-                # 假设您下载了所有等压面
-                # ... (这里可以添加我们之前讨论的估算逻辑) ...
-                pass # 暂时留空
-            else:
-                cloud_base_height_meters = 3500.0 # 如果没有GH数据，使用模拟值
-
             return {
                 "total_cloud_cover": round(total_cloud_cover, 2) if not np.isnan(total_cloud_cover) else None,
                 "high_cloud_cover": round(high_cloud_cover, 2) if not np.isnan(high_cloud_cover) else None,
                 "medium_cloud_cover": round(medium_cloud_cover, 2) if not np.isnan(medium_cloud_cover) else None,
                 "low_cloud_cover": round(low_cloud_cover, 2) if not np.isnan(low_cloud_cover) else None,
-                "approximated_aod": round(approximated_aod, 2),
                 "cloud_base_height_meters": round(cloud_base_height_meters, 2) if not np.isnan(cloud_base_height_meters) else None,
             }
 
