@@ -23,7 +23,7 @@ GFS_DATA_BLOCKS = {
     },
     "cloud_layers": {
         "vars": ["lcdc", "mcdc", "hcdc"],  # lcc,mcc,hcc -> lcdc,mcdc,hcdc (Low/Medium/High Cloud Cover)
-        "levels": ["low_loudLayer", "middle_cloud_layer", "high_cloud_layer"]
+        "levels": ["low_cloud_layer", "middle_cloud_layer", "high_cloud_layer"]
     },
     "cloud_base": {
         "vars": ["hgt"],  # gh -> hgt (Geopotential Height)
