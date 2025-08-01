@@ -1,6 +1,7 @@
 # app/api/v1/endpoints/chromasky.py
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, Any
+from datetime import datetime, timezone
 
 # 导入核心服务
 from app.services.data_fetcher import data_fetcher, EventType
@@ -13,6 +14,16 @@ router = APIRouter()
 # 这确保了在整个应用的生命周期中，计算器只被创建一次
 calculator = ChromaSkyCalculator(data_fetcher)
 
+# --- 辅助函数，用于检查事件是否有效 ---
+def is_event_valid(event: EventType) -> bool:
+    """检查请求的事件是否是未来的事件"""
+    event_time_utc_str = data_fetcher.gfs_time_metadata.get(event, {}).get("forecast_time_utc")
+    if not event_time_utc_str:
+        return False # 如果事件数据不存在，视为无效
+    
+    event_time_utc = datetime.fromisoformat(event_time_utc_str)
+    return event_time_utc > datetime.now(timezone.utc)
+
 # --- API 端点定义 ---
 
 @router.get("/", 
@@ -23,23 +34,20 @@ def get_chromasky_index(
         default="today_sunset",
         description="选择要查询的预报事件: 'today_sunrise', 'today_sunset', 'tomorrow_sunrise', 'tomorrow_sunset'"
     ),
-    lat: float = Query(
-        default=31.23,
-        description="纬度 (Latitude)",
-        ge=-90,
-        le=90
-    ),
-    lon: float = Query(
-        default=121.47,
-        description="经度 (Longitude)",
-        ge=-180,
-        le=360
-    )
+    lat: float = Query(default=31.23, description="纬度 (Latitude)", ge=-90, le=90),
+    lon: float = Query(default=121.47, description="经度 (Longitude)", ge=-180, le=360)
 ):
     """
     获取指定经纬度和事件的ChromaSky指数和详细分项得分。
     """
-    # 1. 调用计算器服务来计算最终得分和分项
+    # --- START OF CHANGE: 增加事件有效性检查 ---
+    if not is_event_valid(event):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"事件 '{event}' 已过去或数据不可用。请查询未来的事件。"
+        )
+    # --- END OF CHANGE ---
+
     calculation_result = calculator.calculate_for_point(lat=lat, lon=lon, event=event)
     
     if calculation_result is None:
@@ -48,38 +56,39 @@ def get_chromasky_index(
             detail=f"无法为事件 '{event}' 在指定地点计算指数。可能是数据不完整。"
         )
         
-    # 2. 组合最终的 API 响应
     gfs_time_info = data_fetcher.gfs_time_metadata.get(event)
     aod_time_info = data_fetcher.aod_time_metadata
     
     return {
         "location": {"lat": lat, "lon": lon},
         "event": event,
-        "time_info": {
-            "gfs_forecast": gfs_time_info,
-            "aod_forecast": aod_time_info
-        },
-        **calculation_result # 使用字典解包合并 "chromasky_score" 和 "breakdown"
+        "time_info": {"gfs_forecast": gfs_time_info, "aod_forecast": aod_time_info},
+        **calculation_result
     }
+
 
 @router.get("/map_data", 
             summary="获取地图数据",
             description="为指定事件生成整个区域的火烧云指数地图数据 (GeoJSON格式)。注意：此请求可能耗时较长。")
 def get_map_data(
-    event: EventType = Query(
-        default="today_sunset", 
-        description="选择要查询的预报事件"
-    )
+    event: EventType = Query(default="today_sunset", description="选择要查询的预报事件")
 ):
     """
     为指定事件生成整个区域的火烧云指数地图数据 (GeoJSON格式)。
     """
+    # --- START OF CHANGE: 增加事件有效性检查 ---
+    if not is_event_valid(event):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"事件 '{event}' 已过去或数据不可用。请查询未来的事件。"
+        )
+    # --- END OF CHANGE ---
+        
     geojson_data = calculator.generate_map_data(event=event)
     
     if "error" in geojson_data:
         raise HTTPException(status_code=404, detail=geojson_data["error"])
         
-    # 为 GeoJSON 添加一些元数据
     gfs_time_info = data_fetcher.gfs_time_metadata.get(event)
     if gfs_time_info:
         geojson_data["properties"] = {

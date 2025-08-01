@@ -53,7 +53,7 @@ class DataFetcher:
         在应用启动时，加载最新的 GFS 和 CAMS AOD 数据。
         """
         # 1. 加载 GFS 数据
-        latest_gfs_manifest_path = self._find_latest_manifest("manifest_*_t*z.json")
+        latest_gfs_manifest_path = self._find_latest_manifest("manifest_*_[0-9][0-9].json")
         if latest_gfs_manifest_path:
             logger.info(f"[GFS] 正在从 GFS 清单加载: {latest_gfs_manifest_path.name}")
             with open(latest_gfs_manifest_path, 'r') as f:

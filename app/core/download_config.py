@@ -17,10 +17,18 @@ DOWNLOAD_DIR = Path("grib_data")
 # --- GFS 特定配置 ---
 GFS_BASE_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl"
 GFS_DATA_BLOCKS = {
-    "total_cloud": {"vars": ["tcc"], "levels": ["entire_atmosphere"]},
-    "cloud_layers": {"vars": ["lcc", "mcc", "hcc"], "levels": ["lowCloudLayer", "middleCloudLayer", "highCloudLayer"]},
-    "cloud_base": {"vars": ["gh"], "levels": ["cloudCeiling"]},
-    # "visibility": {"vars": ["vis"], "levels": ["surface"]}
+    "total_cloud": {
+        "vars": ["tcdc"],  # tcc -> tcdc (Total Cloud Cover)
+        "levels": ["entire_atmosphere"]
+    },
+    "cloud_layers": {
+        "vars": ["lcdc", "mcdc", "hcdc"],  # lcc,mcc,hcc -> lcdc,mcdc,hcdc (Low/Medium/High Cloud Cover)
+        "levels": ["low_loudLayer", "middle_cloud_layer", "high_cloud_layer"]
+    },
+    "cloud_base": {
+        "vars": ["hgt"],  # gh -> hgt (Geopotential Height)
+        "levels": ["cloud_ceiling"]
+    },
 }
 
 # --- CAMS AOD 特定配置 ---

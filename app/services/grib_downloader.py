@@ -60,7 +60,6 @@ class GribDownloader:
             f"计算出的预报时效: {forecast_hour} 小时."
         )
         
-        # 1. 构建分层输出目录
         run_dir_name = f"{run_info['date']}_t{run_info['run_hour']}z"
         event_dir_name = f"{event_name}_f{forecast_hour:03d}"
         output_dir = self.download_dir / run_dir_name / event_dir_name
@@ -70,10 +69,11 @@ class GribDownloader:
         
         for block_name, config in GFS_DATA_BLOCKS.items():
             url = self._build_url(run_info, forecast_hour, config)
-            # 2. 修改输出路径，文件名现在是固定的，放在新的目录里
             output_path = output_dir / f"{block_name}.grib2"
             
             logger.info(f"正在下载 {block_name} 数据 (f{forecast_hour:03d})...")
+            # 打印最终URL用于调试
+            # logger.debug(f"Requesting URL: {url}")
             try:
                 response = requests.get(url, stream=True, timeout=300)
                 response.raise_for_status()
@@ -83,7 +83,8 @@ class GribDownloader:
                 logger.info(f"成功保存到: {output_path}")
                 downloaded_paths[block_name] = output_path
             except requests.exceptions.RequestException as e:
-                logger.error(f"下载 {block_name} 失败: {e}")
+                # 打印失败的URL以帮助诊断
+                logger.error(f"下载 {block_name} 失败 (URL: {url}): {e}")
                 downloaded_paths[block_name] = None
         
         return time_metadata, downloaded_paths

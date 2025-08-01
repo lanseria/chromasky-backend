@@ -5,15 +5,13 @@ import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from typing import Dict, Literal
+from typing import Dict, Literal, Tuple
 
 # 确保 app 目录在 Python 路径中
 sys.path.append('app')
 
 # --- 导入所有需要的服务和配置 ---
-# GFS 相关
 from app.services.grib_downloader import grib_downloader
-# AOD 相关
 import cdsapi
 from app.core.download_config import SUBREGION_PARAMS, DOWNLOAD_DIR, CAMS_DATASET_NAME, CAMS_DATA_BLOCK
 
@@ -24,29 +22,74 @@ logger = logging.getLogger("MasterScheduler")
 # 定义类型别名
 EventType = Literal["today_sunrise", "today_sunset", "tomorrow_sunrise", "tomorrow_sunset"]
 
-
-def _calculate_target_times() -> Dict[EventType, datetime]:
+def _get_target_event_times() -> Dict[EventType, datetime]:
     """
-    计算出所有四个目标事件的UTC时间。
-    这个函数从 data_fetcher.py 移到此处，因为它是一个独立的逻辑。
+    计算所有目标事件的UTC时间（今天/明天的日出/日落）。
+    不再根据当前时间进行过滤，总是获取全部4个事件。
     """
     shanghai_tz = ZoneInfo("Asia/Shanghai")
     now_shanghai = datetime.now(shanghai_tz)
-
+    
     today = now_shanghai.date()
     tomorrow = today + timedelta(days=1)
 
-    # 使用一个近似的时间，因为精确的日出日落时间依赖于具体经纬度
-    # 这里的目标是确定一个大致的预报时间点 (UTC)
-    target_times_shanghai = {
-        "today_sunrise": datetime.combine(today, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=6),  # 对应傍晚的霞光
+    # 定义所有需要下载数据的事件时间（上海时区）
+    all_events = {
+        "today_sunrise": datetime.combine(today, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=6),
+        "today_sunset": datetime.combine(today, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=18),
+        "tomorrow_sunrise": datetime.combine(tomorrow, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=6),
+        "tomorrow_sunset": datetime.combine(tomorrow, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=18),
+    }
+    
+    # 将结果转换为 UTC 时间
+    return {name: dt.astimezone(timezone.utc) for name, dt in all_events.items()}
+
+def _get_future_event_times() -> Dict[EventType, datetime]:
+    """
+    计算所有未来事件的UTC时间。
+    如果一个事件在当前时间之前，则不包含在内。
+    """
+    shanghai_tz = ZoneInfo("Asia/Shanghai")
+    now_shanghai = datetime.now(shanghai_tz)
+    
+    today = now_shanghai.date()
+    tomorrow = today + timedelta(days=1)
+
+    all_events = {
+        "today_sunrise": datetime.combine(today, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=6),
         "today_sunset": datetime.combine(today, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=18),
         "tomorrow_sunrise": datetime.combine(tomorrow, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=6),
         "tomorrow_sunset": datetime.combine(tomorrow, datetime.min.time(), tzinfo=shanghai_tz).replace(hour=18),
     }
 
-    return {name: dt.astimezone(timezone.utc) for name, dt in target_times_shanghai.items()}
+    future_events = {name: dt for name, dt in all_events.items() if dt > now_shanghai}
+    return {name: dt.astimezone(timezone.utc) for name, dt in future_events.items()}
 
+
+def _find_latest_available_gfs_run() -> Tuple[str, str]:
+    """
+    智能判断当前可用的最新 GFS 运行周期。
+    """
+    now_utc = datetime.now(timezone.utc)
+    safe_margin = timedelta(hours=5)
+    
+    potential_runs = [
+        (now_utc.date(), "18"),
+        (now_utc.date(), "12"),
+        (now_utc.date(), "06"),
+        (now_utc.date(), "00"),
+        (now_utc.date() - timedelta(days=1), "18")
+    ]
+    
+    for run_date, run_hour in potential_runs:
+        run_time_utc = datetime.strptime(f"{run_date.strftime('%Y%m%d')}{run_hour}", "%Y%m%d%H").replace(tzinfo=timezone.utc)
+        if (now_utc - run_time_utc) >= safe_margin:
+            logger.info(f"[GFS] 找到最新的可用运行周期: {run_date.strftime('%Y%m%d')} {run_hour}z")
+            return run_date.strftime('%Y%m%d'), run_hour
+            
+    fallback_run = potential_runs[-1]
+    logger.warning(f"[GFS] 未能通过标准逻辑找到运行周期，回退到: {fallback_run[0].strftime('%Y%m%d')} {fallback_run[1]}z")
+    return fallback_run[0].strftime('%Y%m%d'), fallback_run[1]
 
 # ==============================================================================
 # --- GFS 下载任务 ---
@@ -54,72 +97,67 @@ def _calculate_target_times() -> Dict[EventType, datetime]:
 def run_gfs_download_task() -> bool:
     """
     负责下载 GFS 数据。
-    基于上海时间决定下载哪个运行周期，并为未来的4个事件获取数据。
-    返回 True 表示成功执行，False 表示当前时间不在调度窗口内。
+    如果对应运行周期的清单已存在，则跳过下载。
     """
     logger.info("--- [GFS] 任务启动 ---")
-    shanghai_tz = ZoneInfo("Asia/Shanghai")
-    now_shanghai = datetime.now(shanghai_tz)
     
-    run_date_utc = None
-    run_hour_utc = None
+    run_date_utc, run_hour_utc = _find_latest_available_gfs_run()
     
-    logger.info(f"[GFS] 当前上海时间: {now_shanghai.strftime('%Y-%m-%d %H:%M:%S')}")
+    manifest_path = grib_downloader.download_dir / f"manifest_{run_date_utc}_{run_hour_utc}.json"
+    if manifest_path.exists():
+        logger.info(f"[GFS] 清单文件 '{manifest_path.name}' 已存在，跳过该运行周期的下载。")
+        logger.info("--- [GFS] 任务完成 ---")
+        return True
+
+    run_info = {"date": run_date_utc, "run_hour": run_hour_utc}
     
-    # 根据调度规则决定目标运行周期
-    if 6 <= now_shanghai.hour < 12:
-        logger.info("[GFS] 调度窗口：上午，目标为前一天的 18z GFS 运行。")
-        target_run_time_shanghai = now_shanghai.replace(hour=6, minute=0, second=0, microsecond=0)
-        run_date_utc = (target_run_time_shanghai.astimezone(timezone.utc) - timedelta(days=1)).strftime('%Y%m%d')
-        run_hour_utc = "18"
-    elif 12 <= now_shanghai.hour < 18:
-        logger.info("[GFS] 调度窗口：中午，目标为当天的 00z GFS 运行。")
-        target_run_time_shanghai = now_shanghai.replace(hour=12, minute=0, second=0, microsecond=0)
-        run_date_utc = target_run_time_shanghai.astimezone(timezone.utc).strftime('%Y%m%d')
-        run_hour_utc = "00"
-    else:
-        logger.info("[GFS] 当前时间不在有效的调度窗口内，任务跳过。")
-        return False
+    # --- START OF CHANGE ---
+    # 调用新的、不过滤的函数
+    target_events_utc = _get_target_event_times()
+    # --- END OF CHANGE ---
     
-    target_times_utc = _calculate_target_times()
+    logger.info(f"[GFS] 将为以下事件下载数据: {list(target_events_utc.keys())}")
     
-    manifest = {}
+    manifest_content = {}
     
-    for event_name, target_time in target_times_utc.items():
+    # --- START OF CHANGE ---
+    # 循环变量名修改以提高可读性
+    for event_name, target_time in target_events_utc.items():
+    # --- END OF CHANGE ---
         logger.info(f"[GFS] 开始为事件 '{event_name}' ({target_time.isoformat()}) 下载数据")
         
-        run_info = {"date": run_date_utc, "run_hour": run_hour_utc}
         time_meta, file_paths = grib_downloader.get_gfs_data_for_time(run_info, target_time, event_name)
         
-        if time_meta and file_paths:
-            str_file_paths = {k: str(v) for k, v in file_paths.items() if v}
-            manifest[event_name] = {
+        if time_meta and file_paths and all(file_paths.values()):
+            str_file_paths = {k: str(v) for k, v in file_paths.items()}
+            manifest_content[event_name] = {
                 "time_meta": time_meta,
                 "file_paths": str_file_paths
             }
     
-    manifest_path = grib_downloader.download_dir / f"manifest_{run_date_utc}_{run_hour_utc}.json"
+    if not manifest_content:
+        logger.warning("[GFS] 未能成功为任何事件下载数据，不生成清单文件。")
+        return False
+        
     with open(manifest_path, 'w') as f:
-        json.dump(manifest, f, indent=4)
+        json.dump(manifest_content, f, indent=4)
     logger.info(f"[GFS] GFS 数据清单已成功写入: {manifest_path}")
     logger.info("--- [GFS] 任务完成 ---")
     return True
 
 # ==============================================================================
-# --- CAMS AOD 下载任务 (命名更加清晰) ---
+# --- CAMS AOD 下载任务 ---
 # ==============================================================================
 def run_cams_aod_download_task() -> bool:
     """
-    负责下载 CAMS 全球气溶胶预报数据，覆盖未来48小时。
-    返回 True 表示成功，False 表示失败。
+    负责下载 CAMS 全球气溶胶预报数据。
+    如果对应日期的清单和数据文件已存在，则跳过下载。
     """
     logger.info("--- [CAMS_AOD] 任务启动 ---")
     
-    # 1. 确定最新的、服务器上已存在的 CAMS 00z 运行日期和时间
     now_utc = datetime.now(timezone.utc)
     logger.info(f"[CAMS_AOD] 当前系统 UTC 时间: {now_utc.isoformat()}")
     
-    # CAMS 00z 数据在 UTC 早上 8 点后才稳定可用。
     if now_utc.hour < 8:
         run_date = now_utc - timedelta(days=1)
         logger.info("[CAMS_AOD] 当前时间早于 UTC 08:00，将请求前一天的 CAMS 00z 数据。")
@@ -129,20 +167,27 @@ def run_cams_aod_download_task() -> bool:
         
     run_date_str = run_date.strftime('%Y-%m-%d')
     run_hour_str = "00:00"
+
+    # --- START OF CHANGE: 检查是否已下载 ---
+    output_dir_name = f"{run_date_str.replace('-', '')}_t{run_hour_str[:2]}z"
+    output_dir = DOWNLOAD_DIR / "cams_aod" / output_dir_name
+    manifest_path = output_dir / "manifest_aod.json"
+    output_path = output_dir / "aod_forecast.grib"
+
+    if manifest_path.exists() and output_path.exists():
+        logger.info(f"[CAMS_AOD] 数据和清单文件已在 '{output_dir}' 存在，跳过下载。")
+        logger.info("--- [CAMS_AOD] 任务完成 ---")
+        return True
+    # --- END OF CHANGE ---
+
     base_run_time = datetime.strptime(f"{run_date_str} {run_hour_str}", "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
     logger.info(f"[CAMS_AOD] 最终确定的目标 CAMS 运行周期: {run_date_str} {run_hour_str} UTC")
     
-    # 2. 定义需要下载的预报时效
     leadtime_hours_list = [str(h) for h in range(0, 49, 3)]
     
-    # 3. 调用 CDS API
     try:
         c = cdsapi.Client(timeout=600, quiet=False)
-        
-        output_dir_name = f"{run_date_str.replace('-', '')}_t{run_hour_str[:2]}z"
-        output_dir = DOWNLOAD_DIR / "cams_aod" / output_dir_name
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / "aod_forecast.grib"
+        output_dir.mkdir(parents=True, exist_ok=True) # 确保目录存在
         
         request_params = {
             'date': f"{run_date_str}/{run_date_str}",
@@ -161,15 +206,13 @@ def run_cams_aod_download_task() -> bool:
         c.retrieve(CAMS_DATASET_NAME, request_params, output_path)
         logger.info(f"[CAMS_AOD] CAMS AOD 数据已成功下载到: {output_path}")
         
-        # 4. 生成清单文件
-        manifest = {
+        manifest_content = {
             "base_time_utc": base_run_time.isoformat(),
             "file_path": str(output_path),
             "available_forecast_hours": [int(h) for h in leadtime_hours_list]
         }
-        manifest_path = output_dir / "manifest_aod.json"
         with open(manifest_path, 'w') as f:
-            json.dump(manifest, f, indent=4)
+            json.dump(manifest_content, f, indent=4)
         logger.info(f"[CAMS_AOD] AOD 数据清单已成功写入: {manifest_path}")
         logger.info("--- [CAMS_AOD] 任务完成 ---")
         return True
@@ -180,7 +223,7 @@ def run_cams_aod_download_task() -> bool:
         return False
 
 # ==============================================================================
-# --- 主执行函数 ---
+# --- 主执行函数 (保持不变) ---
 # ==============================================================================
 def main():
     """
@@ -188,19 +231,15 @@ def main():
     """
     logger.info("====== 主调度任务开始 ======")
     
-    # 执行 GFS 下载
     try:
-        gfs_success = run_gfs_download_task()
-        if not gfs_success:
-            logger.warning("GFS 下载任务因时间不匹配而被跳过。")
+        run_gfs_download_task()
     except Exception as e:
         logger.error(f"执行 GFS 下载任务时发生未捕获的异常: {e}", exc_info=True)
     
-    # 执行 CAMS AOD 下载
     try:
         run_cams_aod_download_task()
     except Exception as e:
-        logger.error(f"执行 CAMS AOD 下载任务时发生未捕获的异常: {e}", exc_info=True)
+        logger.error(f"执行 CAMS AOD 下载任务时发生未捕AOD的异常: {e}", exc_info=True)
         
     logger.info("====== 主调度任务结束 ======")
 
