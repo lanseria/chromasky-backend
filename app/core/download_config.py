@@ -5,10 +5,10 @@ from pathlib import Path
 # 这个字典现在是所有下载器的公共配置
 SUBREGION_PARAMS = {
     "subregion": "",
-    "toplat": 55,
-    "leftlon": 100,
-    "rightlon": 135,
-    "bottomlat": 15
+    "toplat": 33,
+    "leftlon": 118,
+    "rightlon": 124,
+    "bottomlat": 28
 }
 
 # 下载文件的根目录

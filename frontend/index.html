@@ -6,116 +6,209 @@
     <title>ChromaSky - 火烧云指数地图</title>
     <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
     
-    <!-- 1. 引入 MapLibre GL JS 的 CSS (通过 CDN) -->
+    <!-- 1. 引入 MapLibre GL JS 的 CSS -->
     <link href="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.css" rel="stylesheet" />
     
-    <!-- 2. 引入 MapLibre GL JS 的 JavaScript (通过 CDN) -->
+    <!-- 2. 引入 MapLibre GL JS 的 JavaScript -->
     <script src="https://unpkg.com/maplibre-gl@4.3.2/dist/maplibre-gl.js"></script>
     
     <style>
-        body { margin: 0; padding: 0; }
+        body { margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif; }
         #map { position: absolute; top: 0; bottom: 0; width: 100%; }
         .map-overlay {
-            font-family: Arial, sans-serif;
-            background: rgba(255, 255, 255, 0.8);
+            background: rgba(255, 255, 255, 0.9);
             position: absolute;
+            padding: 12px;
+            border-radius: 6px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15);
+            z-index: 1;
+        }
+        #controls {
+            top: 20px;
+            left: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        #legend {
             bottom: 20px;
             right: 20px;
-            padding: 10px;
-            border-radius: 3px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
         }
         .legend-key {
             display: inline-block;
-            border-radius: 20%;
-            width: 10px;
-            height: 10px;
-            margin-right: 5px;
+            border-radius: 50%;
+            width: 12px;
+            height: 12px;
+            margin-right: 8px;
+            vertical-align: middle;
         }
+        #event-selector {
+            padding: 5px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+        }
+        h4, p { margin: 0 0 8px 0; }
+        p:last-child { margin-bottom: 0; }
     </style>
 </head>
 <body>
 
 <div id="map"></div>
-<div id="info" class="map-overlay">
+
+<!-- START OF CHANGE: UI 控件容器 -->
+<div id="controls" class="map-overlay">
+    <h4>预报事件选择</h4>
+    <select id="event-selector" disabled>
+        <option>正在加载数据...</option>
+    </select>
+    <p id="info-display"></p>
+</div>
+<!-- END OF CHANGE -->
+
+<div id="legend" class="map-overlay">
     <h4>火烧云指数</h4>
-    <div><span class="legend-key" style="background-color: #d0021b;"></span>8 - 10 (绝佳)</div>
-    <div><span class="legend-key" style="background-color: #f5a623;"></span>6 - 8 (良好)</div>
-    <div><span class="legend-key" style="background-color: #50e3c2;"></span>4 - 6 (一般)</div>
-    <div><span class="legend-key" style="background-color: #4a90e2;"></span>2 - 4 (较差)</div>
+    <p><span class="legend-key" style="background-color: #d0021b;"></span>8 - 10 (绝佳)</p>
+    <p><span class="legend-key" style="background-color: #f5a623;"></span>6 - 8 (良好)</p>
+    <p><span class="legend-key" style="background-color: #50e3c2;"></span>4 - 6 (一般)</p>
+    <p><span class="legend-key" style="background-color: #4a90e2;"></span>2 - 4 (较差)</p>
 </div>
 
 <script>
     // 3. 初始化地图
     const map = new maplibregl.Map({
         container: 'map',
-        style: `https://api.maptiler.com/maps/toner-v2/style.json?key=COzW8kKwrFCzdf13x98K`,
-        center: [115, 35], // 将中心点设在中国区域
+        style: `https://api.maptiler.com/maps/01984f92-9c11-7548-9066-f288222ce75b/style.json?key=COzW8kKwrFCzdf13x98K`, // 替换为你的 MapTiler key
+        center: [115, 35],
         zoom: 3.5
     });
 
-    // 定义颜色梯度，用于将分数映射到颜色
     const CHROMA_COLORS = [
-        2, '#4a90e2',  // 分数 >= 2, 蓝色
-        4, '#50e3c2',  // 分数 >= 4, 青色
-        6, '#f5a623',  // 分数 >= 6, 黄色
-        8, '#d0021b'   // 分数 >= 8, 红色
+        2, '#4a90e2', 4, '#50e3c2', 6, '#f5a623', 8, '#d0021b'
     ];
 
-    map.on('load', () => {
-        // 4. 添加 GeoJSON 数据源
-        map.addSource('chromasky-data', {
-            type: 'geojson',
-            // 从我们后端提供的静态路径加载数据
-            data: '/static/gfs/20250802_t00z/tomorrow_sunrise.geojson'
-        });
+    let gfsDataManifest = {};
+    const eventSelector = document.getElementById('event-selector');
+    const infoDisplay = document.getElementById('info-display');
 
-        // 5. 添加热力图图层
-        map.addLayer({
-            id: 'chromasky-heatmap',
-            type: 'heatmap',
-            source: 'chromasky-data',
-            maxzoom: 6, // 在缩放级别低于6时显示热力图
-            paint: {
-                'heatmap-weight': [
-                    'interpolate', ['linear'], ['get', 'score'],
-                    0, 0,
-                    10, 1
-                ],
-                'heatmap-intensity': 1.5,
-                'heatmap-color': [
-                    'interpolate', ['linear'], ['heatmap-density'],
-                    0, 'rgba(0, 0, 255, 0)',
-                    0.2, 'royalblue',
-                    0.4, 'cyan',
-                    0.6, 'lime',
-                    0.8, 'yellow',
-                    1, 'red'
-                ],
-                'heatmap-radius': 25,
-                'heatmap-opacity': 0.8
-            }
-        });
+    // 将事件名称翻译为中文
+    const eventTranslations = {
+        "today_sunrise": "今日日出",
+        "today_sunset": "今日日落",
+        "tomorrow_sunrise": "明日日出",
+        "tomorrow_sunset": "明日日落"
+    };
 
-        // 6. 添加圆点图层 (在高缩放级别下显示)
-        map.addLayer({
-            id: 'chromasky-points',
-            type: 'circle',
-            source: 'chromasky-data',
-            minzoom: 5, // 在缩放级别高于5时显示圆点
-            paint: {
-                'circle-radius': 4,
-                'circle-color': [
-                    'step',
-                    ['get', 'score'],
-                    '#cccccc', // 默认颜色 (分数 < 2)
-                    ...CHROMA_COLORS
-                ],
-                'circle-stroke-color': 'white',
-                'circle-stroke-width': 0.5,
-                'circle-opacity': 0.8
+    /**
+     * 更新地图数据和信息显示
+     */
+    function updateMapData(eventKey) {
+        const latestRunKey = gfsDataManifest.latest_run;
+        const eventData = gfsDataManifest.runs[latestRunKey][eventKey];
+        const geojsonUrl = `/static/${eventData}`; // 构建完整的 URL
+
+        if (!eventData) {
+            console.error(`事件 ${eventKey} 的数据未在清单中找到!`);
+            return;
+        }
+        
+        console.log(`正在加载事件: ${eventKey}, URL: ${geojsonUrl}`);
+        
+        // 使用 setData 动态更新数据源，效率很高
+        map.getSource('chromasky-data').setData(geojsonUrl);
+        
+        // 从 GeoJSON 的 properties 中获取元数据并显示
+        fetch(geojsonUrl)
+            .then(response => response.json())
+            .then(data => {
+                if (data.properties) {
+                    const baseTime = new Date(data.properties.base_time_utc).toLocaleString('zh-CN');
+                    const forecastTime = new Date(data.properties.forecast_time_utc).toLocaleString('zh-CN');
+                    infoDisplay.innerHTML = `
+                        <b>GFS 运行:</b> ${baseTime}<br>
+                        <b>预报时间:</b> ${forecastTime}
+                    `;
+                }
+            });
+    }
+
+    map.on('load', async () => {
+        try {
+            // --- START OF CHANGE: 动态加载逻辑 ---
+            
+            // 1. 获取主数据清单
+            const response = await fetch('/static/gfs/gfs_data_manifest.json');
+            if (!response.ok) throw new Error(`无法加载主清单: ${response.statusText}`);
+            gfsDataManifest = await response.json();
+
+            const latestRunKey = gfsDataManifest.latest_run;
+            if (!latestRunKey || !gfsDataManifest.runs[latestRunKey]) {
+                throw new Error("清单格式不正确或无可用数据。");
             }
-        });
+            const availableEvents = gfsDataManifest.runs[latestRunKey];
+            
+            // 2. 动态填充下拉选择框
+            eventSelector.innerHTML = ''; // 清空 "正在加载..."
+            Object.keys(availableEvents).forEach(eventKey => {
+                const option = document.createElement('option');
+                option.value = eventKey;
+                option.textContent = eventTranslations[eventKey] || eventKey;
+                eventSelector.appendChild(option);
+            });
+            eventSelector.disabled = false;
+
+            // 3. 添加数据源 (初始时为空，或加载第一个事件)
+            const initialEventKey = Object.keys(availableEvents)[0];
+            const initialUrl = `/static/${availableEvents[initialEventKey]}`;
+            
+            map.addSource('chromasky-data', {
+                type: 'geojson',
+                data: initialUrl
+            });
+            
+            // 4. 添加图层 (与之前相同)
+            map.addLayer({
+                id: 'chromasky-heatmap',
+                type: 'heatmap',
+                source: 'chromasky-data',
+                maxzoom: 6,
+                paint: {
+                    'heatmap-weight': ['interpolate', ['linear'], ['get', 'score'], 0, 0, 10, 1],
+                    'heatmap-intensity': 1.5,
+                    'heatmap-color': ['interpolate', ['linear'], ['heatmap-density'], 0, 'rgba(0,0,255,0)', 0.2, 'royalblue', 0.4, 'cyan', 0.6, 'lime', 0.8, 'yellow', 1, 'red'],
+                    'heatmap-radius': 25,
+                    'heatmap-opacity': 0.8
+                }
+            });
+
+            map.addLayer({
+                id: 'chromasky-points',
+                type: 'circle',
+                source: 'chromasky-data',
+                minzoom: 5,
+                paint: {
+                    'circle-radius': 4,
+                    'circle-color': ['step', ['get', 'score'], '#cccccc', ...CHROMA_COLORS],
+                    'circle-stroke-color': 'white',
+                    'circle-stroke-width': 0.5,
+                    'circle-opacity': 0.8
+                }
+            });
+
+            // 5. 绑定事件监听器
+            eventSelector.addEventListener('change', (e) => {
+                updateMapData(e.target.value);
+            });
+            
+            // 6. 初始化信息显示
+            updateMapData(initialEventKey);
+
+            // --- END OF CHANGE ---
+
+        } catch (error) {
+            console.error("地图加载或数据处理失败:", error);
+            eventSelector.innerHTML = '<option>数据加载失败</option>';
+            infoDisplay.textContent = '无法获取预报数据，请检查后端服务是否正常。';
+        }
     });
 </script>
 
