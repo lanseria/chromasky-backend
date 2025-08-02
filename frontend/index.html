@@ -67,7 +67,7 @@
         map.addSource('chromasky-data', {
             type: 'geojson',
             // 从我们后端提供的静态路径加载数据
-            data: '/api/v1/chromasky/map_data?event=tomorrow_sunrise&density=high'
+            data: '/static/gfs/20250802_t00z/tomorrow_sunrise.geojson'
         });
 
         // 5. 添加热力图图层
