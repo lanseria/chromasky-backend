@@ -83,7 +83,7 @@ class ChromaSkyCalculator:
         if event not in self.data_fetcher.gfs_datasets:
             return {"error": f"事件 '{event}' 的 GFS 数据不可用。"}
         
-        density_to_step = {MapDensity.low: 8, MapDensity.medium: 4, MapDensity.high: 2}
+        density_to_step = {MapDensity.low: 3, MapDensity.medium: 2, MapDensity.high: 1}
         step = density_to_step[density]
         lats = self.data_fetcher.gfs_datasets[event].latitude.values[::step]
         lons = self.data_fetcher.gfs_datasets[event].longitude.values[::step]
