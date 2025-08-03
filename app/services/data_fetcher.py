@@ -28,18 +28,21 @@ class DataFetcher:
     _instance = None
     _lock = threading.Lock()
 
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs): # 允许传递参数
         if not cls._instance:
             with cls._lock:
                 if not cls._instance:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
+    # --- 修改此方法 ---
     def __init__(self, force_reload=False):
+        # 检查是否需要重新加载
         if hasattr(self, '_initialized') and not force_reload:
             return
             
         with self._lock:
+            # 双重检查锁，确保在等待锁期间没有其他线程完成初始化
             if hasattr(self, '_initialized') and not force_reload:
                 return
             
@@ -48,7 +51,9 @@ class DataFetcher:
             self.gfs_time_metadata: Dict[EventType, dict] = {}
             self.aod_dataset: xr.Dataset | None = None
             self.aod_time_metadata: dict = {}
+            
             self._load_all_data_from_disk()
+            
             self._initialized = True
             logger.info("DataFetcher 数据加载完成。")
 

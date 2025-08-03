@@ -21,9 +21,16 @@ class GribDownloader:
         dir_path = f"/gfs.{run_info['date']}/{run_info['run_hour']}/atmos"
         file_name = f"gfs.t{run_info['run_hour']}z.pgrb2.0p25.f{forecast_hour:03d}"
         
-        params = { "dir": dir_path, "file": file_name, **SUBREGION_PARAMS }
+        params = { "dir": dir_path, "file": file_name }
+        
+        # --- 新增逻辑：仅在配置了子区域时才添加区域参数 ---
+        if SUBREGION_PARAMS.get("subregion"):
+            params.update(SUBREGION_PARAMS)
+        else:
+            logger.info("未配置子区域，将下载全球数据。")
+            
         for var in block_config["vars"]:
-            params[f"var_{var.upper()}"] = "on" # 变量名通常大写
+            params[f"var_{var.upper()}"] = "on"
         for level in block_config["levels"]:
             params[f"lev_{level}"] = "on"
         

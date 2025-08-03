@@ -60,9 +60,17 @@ def run_cams_aod_download_task() -> bool:
             ],
             'type': 'forecast',
         }
-        
+        # --- 新增逻辑：仅在配置了子区域时才添加 area 参数 ---
+        if SUBREGION_PARAMS.get("subregion"):
+            request_params['area'] = [
+                SUBREGION_PARAMS["toplat"], SUBREGION_PARAMS["leftlon"],
+                SUBREGION_PARAMS["bottomlat"], SUBREGION_PARAMS["rightlon"],
+            ]
+        else:
+            logger.info("[CAMS_AOD] 未配置子区域，将下载全球数据。")
+
         logger.info("[CAMS_AOD] 正在向 Copernicus ADS 发送请求...")
-        c.retrieve(CAMS_DATASET_NAME, request_params, str(output_path)) # cdsapi 路径参数最好是字符串
+        c.retrieve(CAMS_DATASET_NAME, request_params, str(output_path))
         logger.info(f"[CAMS_AOD] CAMS AOD 数据已成功下载到: {output_path}")
         
         manifest_content = {

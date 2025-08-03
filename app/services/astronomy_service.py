@@ -82,6 +82,9 @@ class AstronomyService:
         observer.date = target_utc_time
         target_horizon = ephem.degrees(EVENT_HORIZONS[event])
 
+        # --- 核心修复：根据事件类型确定二分查找方向 ---
+        is_rising_event = event in ["sunrise", "first_light"]
+        
         for lat in [x * step for x in range(int(lat_range[0]/step), int(lat_range[1]/step) + 1)]:
             observer.lat = str(lat)
             
@@ -94,16 +97,27 @@ class AstronomyService:
                 observer.lon = str(mid_lon)
                 sun.compute(observer)
                 
-                # 日出线通常在太阳东升时，经度较小
-                if sun.alt > target_horizon:
-                    high_lon = mid_lon
-                else:
-                    low_lon = mid_lon
-            
+                # --- 应用正确的逻辑 ---
+                if is_rising_event:
+                    # 日出逻辑: 太阳过高，向西找 (减小经度)
+                    if sun.alt > target_horizon:
+                        high_lon = mid_lon
+                    else:
+                        low_lon = mid_lon
+                else: # is_setting_event
+                    # 日落逻辑: 太阳过高，向东找 (增大经度)
+                    if sun.alt > target_horizon:
+                        low_lon = mid_lon
+                    else:
+                        high_lon = mid_lon
+
             # 检查找到的点是否合理（避免极昼/极夜区域的无效点）
+            found_lon = (low_lon + high_lon) / 2
+            observer.lon = str(found_lon)
             sun.compute(observer)
-            if abs(sun.alt - target_horizon) < ephem.degrees('1'): # 容忍1度误差
-                found_lon = (low_lon + high_lon) / 2
+
+            # 稍微放宽容忍度，因为二分查找的精度限制
+            if abs(sun.alt - target_horizon) < ephem.degrees('1.5'):
                 points.append((round(found_lon, 4), lat))
 
         return points
@@ -114,7 +128,8 @@ class AstronomyService:
         target_date: date,
         center_time_str: str,
         window_minutes: int,
-        local_tz_str: str
+        local_tz_str: str,
+        lat_range: Tuple[float, float] # 新增参数
     ) -> Dict[str, Any]:
         """
         生成一个GeoJSON，表示在指定时间窗口内发生某事件的区域。
@@ -123,22 +138,20 @@ class AstronomyService:
             local_tz = ZoneInfo(local_tz_str)
             center_time = time.fromisoformat(center_time_str)
             center_dt_local = datetime.combine(target_date, center_time, tzinfo=local_tz)
-            
             start_dt_local = center_dt_local - timedelta(minutes=window_minutes / 2)
             end_dt_local = center_dt_local + timedelta(minutes=window_minutes / 2)
-
             start_utc = start_dt_local.astimezone(timezone.utc)
             end_utc = end_dt_local.astimezone(timezone.utc)
 
         except (ValueError, ZoneInfoNotFoundError) as e:
             return {"error": f"时间和时区参数无效: {e}"}
 
-        logger.info(f"正在计算事件 '{event}' 的区域...")
+        logger.info(f"正在计算事件 '{event}' 的区域 (纬度范围: {lat_range})...")
         logger.info(f"时间窗口 (UTC): {start_utc.isoformat()} to {end_utc.isoformat()}")
 
         # 计算两条等时线
-        line1 = self._calculate_event_isochrone(start_utc, event)
-        line2 = self._calculate_event_isochrone(end_utc, event)
+        line1 = self._calculate_event_isochrone(start_utc, event, lat_range=lat_range)
+        line2 = self._calculate_event_isochrone(end_utc, event, lat_range=lat_range)
 
         if not line1 or not line2:
             return {"error": "无法在此时间窗口内计算事件区域，可能处于极昼或极夜。"}
@@ -161,6 +174,7 @@ class AstronomyService:
                         "date": target_date.isoformat(),
                         "time_window_local": f"{start_dt_local.time().isoformat()} - {end_dt_local.time().isoformat()}",
                         "timezone": local_tz_str,
+                        "latitude_range": list(lat_range)
                     }
                 }
             ]
