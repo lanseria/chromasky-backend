@@ -1,13 +1,27 @@
 # app/api/v1/endpoints/chromasky.py
 from fastapi import APIRouter, HTTPException, Query
 from typing import Any
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from enum import Enum
+import re
 
 from app.services.data_fetcher import DataFetcher, EventType
 from app.services.chromasky_calculator import ChromaSkyCalculator, MapDensity
+from app.services.astronomy_service import AstronomyService
+from app.models.sun_events import SunEventsResponse # 新增的模型
+
+
+class SunEventType(str, Enum):
+    sunrise = "sunrise"
+    sunset = "sunset"
+    first_light = "first_light"
+    last_light = "last_light"
 
 router = APIRouter()
 calculator = ChromaSkyCalculator()
+astronomy_service = AstronomyService()
+
 
 def is_event_valid(event: EventType) -> bool:
     data_fetcher = DataFetcher()
@@ -39,26 +53,100 @@ def get_chromasky_index(
         **result
     }
 
-@router.get("/map_data", summary="获取地图数据")
-def get_map_data(
-    event: EventType = Query("today_sunset"),
-    density: MapDensity = Query(MapDensity.medium)
+
+@router.get(
+    "/event_area",
+    summary="获取指定时间窗口内发生某太阳事件的地理区域",
+    response_model=dict  # GeoJSON结构复杂，直接用dict作为响应模型
+)
+def get_event_area_geojson(
+    event: SunEventType = Query(SunEventType.sunrise, description="要计算的太阳事件类型"),
+    center_time: str = Query(
+        "05:00",
+        description="时间窗口的中心时间，格式为 HH:MM",
+        regex=r"^([01]\d|2[0-3]):([0-5]\d)$" # 正则表达式验证格式
+    ),
+    window_minutes: int = Query(
+        60,
+        description="时间窗口的总分钟数 (例如, 60 表示中心时间前后各30分钟)",
+        ge=1,
+        le=240 # 限制最大窗口，防止无效计算
+    ),
+    target_date_str: str = Query(
+        default_factory=lambda: date.today().isoformat(),
+        description="目标日期，格式为 YYYY-MM-DD",
+        alias="date"
+    ),
+    tz: str = Query("Asia/Shanghai", description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
 ):
-    if not is_event_valid(event):
-        raise HTTPException(status_code=404, detail=f"事件 '{event}' 已过去或数据不可用。")
+    """
+    计算并返回一个 GeoJSON Polygon，该多边形覆盖了在指定日期和时间窗口内发生特定太阳事件的所有地理区域。
     
-    geojson_data = calculator.generate_map_data(event=event, density=density)
+    例如，要查找今天在上海时间早上4:30到5:30之间发生日出的区域:
+    - `event=sunrise`
+    - `center_time=05:00`
+    - `window_minutes=60`
+    """
+    try:
+        target_date = date.fromisoformat(target_date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式无效，请使用 'YYYY-MM-DD' 格式。")
+
+    geojson_data = astronomy_service.generate_event_area_geojson(
+        event=event.value,
+        target_date=target_date,
+        center_time_str=center_time,
+        window_minutes=window_minutes,
+        local_tz_str=tz
+    )
+
     if "error" in geojson_data:
         raise HTTPException(status_code=404, detail=geojson_data["error"])
-    
-    data_fetcher = DataFetcher()
-    if gfs_info := data_fetcher.gfs_time_metadata.get(event):
-        geojson_data["properties"] = {
-            "event": event,
-            "density": density.value,
-            **gfs_info
-        }
+
     return geojson_data
+
+
+@router.get(
+    "/sun_events",
+    summary="获取指定日期的太阳事件时间",
+    response_model=SunEventsResponse
+)
+def get_sun_events(
+    lat: float = Query(31.23, description="纬度", ge=-90, le=90),
+    lon: float = Query(121.47, description="经度", ge=-180, le=360),
+    target_date_str: str = Query(
+        default_factory=lambda: date.today().isoformat(),
+        description="目标日期，格式为 YYYY-MM-DD",
+        alias="date" # 允许用户使用 'date' 作为查询参数
+    ),
+    tz: str = Query("Asia/Shanghai", description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
+):
+    """
+    根据给定的经纬度、日期和时区，计算四个关键的太阳事件时间：
+    - **first_light**: 民用晨光始 (太阳在地平线下6度)
+    - **sunrise**: 标准日出时间
+    - **sunset**: 标准日落时间
+    - **last_light**: 民用昏影终 (太阳在地平线下6度)
+    """
+    try:
+        target_date = date.fromisoformat(target_date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="日期格式无效，请使用 'YYYY-MM-DD' 格式。")
+
+    try:
+        # 验证时区是否有效
+        ZoneInfo(tz)
+    except ZoneInfoNotFoundError:
+        raise HTTPException(status_code=400, detail=f"时区 '{tz}' 无效。")
+
+    event_times = astronomy_service.calculate_sun_events(lat, lon, target_date, tz)
+
+    return SunEventsResponse(
+        location={"lat": lat, "lon": lon},
+        date=target_date.isoformat(),
+        timezone=tz,
+        events=event_times
+    )
 
 @router.get("/data_check", summary="调试接口：检查单点原始数据")
 def check_data_for_point(
