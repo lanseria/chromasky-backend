@@ -5,7 +5,7 @@ import cdsapi
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.core.download_config import SUBREGION_PARAMS, DOWNLOAD_DIR, CAMS_DATASET_NAME, CAMS_DATA_BLOCK
+from app.core.download_config import DOWNLOAD_DIR, CAMS_DATASET_NAME, CAMS_DATA_BLOCK
 
 logger = logging.getLogger("CAMSTask")
 
@@ -13,12 +13,14 @@ def run_cams_aod_download_task() -> bool:
     """
     负责下载 CAMS 全球气溶胶预报数据。
     如果对应日期的清单和数据文件已存在，则跳过下载。
+    此版本已更新为始终下载全球数据。
     """
     logger.info("--- [CAMS_AOD] 任务启动 ---")
     
     now_utc = datetime.now(timezone.utc)
     logger.info(f"[CAMS_AOD] 当前系统 UTC 时间: {now_utc.isoformat()}")
     
+    # 决定请求哪个运行周期的逻辑保持不变
     if now_utc.hour < 8:
         run_date = now_utc - timedelta(days=1)
         logger.info("[CAMS_AOD] 当前时间早于 UTC 08:00，将请求前一天的 CAMS 00z 数据。")
@@ -29,13 +31,15 @@ def run_cams_aod_download_task() -> bool:
     run_date_str = run_date.strftime('%Y-%m-%d')
     run_hour_str = "00:00"
 
+    # 文件和目录结构逻辑保持不变
     output_dir_name = f"{run_date_str.replace('-', '')}_t{run_hour_str[:2]}z"
     output_dir = DOWNLOAD_DIR / "cams_aod" / output_dir_name
     manifest_path = output_dir / "manifest_aod.json"
     output_path = output_dir / "aod_forecast.grib"
 
+    # 检查文件是否已存在，跳过下载的逻辑保持不变
     if manifest_path.exists() and output_path.exists():
-        logger.info(f"[CAMS_AOD] 数据和清单文件已在 '{output_dir}' 存在，跳过下载。")
+        logger.info(f"[CAMS_AOD] 全球数据和清单文件已在 '{output_dir}' 存在，跳过下载。")
         logger.info("--- [CAMS_AOD] 任务完成 ---")
         return True
 
@@ -48,31 +52,26 @@ def run_cams_aod_download_task() -> bool:
         c = cdsapi.Client(timeout=600, quiet=False)
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # --- START OF CHANGE ---
+        # 构建请求参数，不再包含 'area' 键
         request_params = {
             'date': f"{run_date_str}/{run_date_str}",
             'time': run_hour_str,
             'format': 'grib',
             'variable': CAMS_DATA_BLOCK['variable'],
             'leadtime_hour': leadtime_hours_list,
-            'area': [
-                SUBREGION_PARAMS["toplat"], SUBREGION_PARAMS["leftlon"],
-                SUBREGION_PARAMS["bottomlat"], SUBREGION_PARAMS["rightlon"],
-            ],
             'type': 'forecast',
         }
-        # --- 新增逻辑：仅在配置了子区域时才添加 area 参数 ---
-        if SUBREGION_PARAMS.get("subregion"):
-            request_params['area'] = [
-                SUBREGION_PARAMS["toplat"], SUBREGION_PARAMS["leftlon"],
-                SUBREGION_PARAMS["bottomlat"], SUBREGION_PARAMS["rightlon"],
-            ]
-        else:
-            logger.info("[CAMS_AOD] 未配置子区域，将下载全球数据。")
 
-        logger.info("[CAMS_AOD] 正在向 Copernicus ADS 发送请求...")
+        # 移除原来根据 SUBREGION_PARAMS 添加 area 的逻辑
+        logger.info("[CAMS_AOD] 配置为下载全球数据。")
+        # --- END OF CHANGE ---
+
+        logger.info("[CAMS_AOD] 正在向 Copernicus ADS 发送请求以下载全球数据...")
         c.retrieve(CAMS_DATASET_NAME, request_params, str(output_path))
-        logger.info(f"[CAMS_AOD] CAMS AOD 数据已成功下载到: {output_path}")
+        logger.info(f"[CAMS_AOD] CAMS AOD 全球数据已成功下载到: {output_path}")
         
+        # 清单文件写入逻辑保持不变
         manifest_content = {
             "base_time_utc": base_run_time.isoformat(),
             "file_path": str(output_path),

@@ -55,6 +55,36 @@ def _worker_calculate_score(
         logger.error(f"Worker在计算点 ({lat}, {lon}) 时出错: {e}", exc_info=True)
         return None
 
+def _worker_process_chunk(
+    points_chunk: list[Tuple[float, float]], 
+    event_name: str
+) -> list[Dict[str, Any]]:
+    """
+    工作进程函数，负责处理一个“点块”(chunk)。
+    它会在自己的进程内初始化DataFetcher，并完成数据提取和计算的全流程。
+    """
+    # 关键点：每个工作进程拥有自己的DataFetcher实例。
+    # force_reload=True 确保它加载与主任务相同批次的数据。
+    # 这利用了操作系统的文件缓存，后续进程加载会很快。
+    df = DataFetcher(force_reload=True) 
+    results = []
+
+    # 循环处理分配给这个worker的点
+    for lat, lon in points_chunk:
+        try:
+            # 在工作进程内部执行耗时的数据提取
+            raw_data = df.get_all_variables_for_point(lat, lon, event_name)
+            avg_cloud = df.get_light_path_avg_cloudiness(lat, lon, event_name)
+
+            # 调用已有的纯计算函数
+            score_result = _worker_calculate_score(lat, lon, raw_data, avg_cloud)
+            if score_result:
+                results.append(score_result)
+        except Exception as e:
+            # 捕获单点处理的异常，防止整个块失败
+            logger.error(f"Worker在处理点 ({lat}, {lon}) 时出错: {e}", exc_info=False) # 在worker中可简化日志
+    
+    return results
 
 def update_gfs_main_manifest(run_key: str, event_geojson_paths: Dict[str, str], metadata: Dict):
     """
@@ -89,17 +119,17 @@ def update_gfs_main_manifest(run_key: str, event_geojson_paths: Dict[str, str], 
 def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: str) -> None:
     """
     新流程（已优化）：
-    1. 在主进程中加载一次所有数据。
+    1. 在主进程中加载一次所有数据（主要用于获取元数据和坐标信息）。
     2. 计算天文事件区域 (Polygon)。
     3. 在该区域内，筛选出 GFS 格点。
-    4. 在主进程中为每个格点提取所需原始数据。
-    5. 将轻量级的原始数据和坐标发送到工作进程进行纯计算。
-    6. 收集结果并生成 GeoJSON。
+    4. 将格点列表分块，分发给工作进程。
+    5. 每个工作进程独立完成“数据提取 -> 计算”的完整流程。
+    6. 主进程收集结果并生成 GeoJSON。
     """
-    logger.info("--- [GeoJSON Point-in-Area] 任务启动 ---")
+    logger.info("--- [GeoJSON Point-in-Area] 任务启动 (优化策略：分块并行) ---") # 更新日志信息
     
     try:
-        # --- 优化：在主进程中加载一次数据 ---
+        # 主进程加载数据，主要用于筛选格点和元数据
         logger.info("[GeoJSON] 正在主进程中加载所有数据...")
         main_df = DataFetcher(force_reload=True)
         astronomy_service = AstronomyService()
@@ -130,7 +160,7 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
                 logger.warning(f"事件 '{event_name}' 的 GFS 数据未在DataFetcher中加载，跳过。")
                 continue
 
-            # 步骤 A: 计算天文事件区域 (逻辑不变)
+            # 步骤 A: 计算天文事件区域
             if "sunrise" in event_name:
                 event_type, center_time = "sunrise", SUNRISE_CENTER_TIME
             elif "sunset" in event_name:
@@ -147,7 +177,7 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
             event_polygon = Polygon(area_geojson["features"][0]["geometry"]["coordinates"][0])
             logger.info(f"成功计算地理区域，面积: {event_polygon.area:.2f} (平方度)。")
 
-            # 步骤 B & C: 筛选格点并准备计算任务 (逻辑不变)
+            # 步骤 B & C: 筛选格点
             gfs_ds = main_df.gfs_datasets[event_name]
             lats_all, lons_all = gfs_ds.latitude.values, gfs_ds.longitude.values
             lats_clipped = lats_all[(lats_all >= CALCULATION_LAT_BOTTOM) & (lats_all <= CALCULATION_LAT_TOP)]
@@ -164,32 +194,39 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
             if not total_points:
                 logger.warning(f"在计算出的地理区域内没有找到任何GFS格点，跳过事件 '{event_name}'。")
                 continue
-            
-            # --- 优化第三步：在主进程中准备好所有 worker 的输入数据 ---
-            logger.info(f"在区域内筛选出 {total_points} 个格点，正在准备计算任务...")
-            tasks_for_workers: list[Tuple] = []
-            for lat, lon in points_to_process:
-                # 在主进程中执行所有数据提取操作
-                raw_data = main_df.get_all_variables_for_point(lat, lon, event_name)
-                avg_cloud = main_df.get_light_path_avg_cloudiness(lat, lon, event_name)
-                tasks_for_workers.append((lat, lon, raw_data, avg_cloud))
 
-            # --- 优化第四步：使用新的并行计算模型 ---
-            logger.info("任务准备完毕，开始并行计算指数...")
+            # 移除了原有的“优化第三步”：不再在主进程中准备 worker 的输入数据。
+            
+            # --- 新的优化步骤：将点列表分块 ---
+            logger.info(f"在区域内筛选出 {total_points} 个格点，将分块并行处理...")
+            # 调整块大小可以优化性能。200是一个不错的起点。
+            # 如果点很少，确保块大小不会导致只创建一个块。
+            chunk_size = max(100, total_points // ((os.cpu_count() or 2) * 2)) # 动态调整块大小
+            chunk_size = min(chunk_size, 500) # 设置一个上限
+            
+            point_chunks = [
+                points_to_process[i:i + chunk_size] 
+                for i in range(0, total_points, chunk_size)
+            ]
+            logger.info(f"任务将被分为 {len(point_chunks)} 个块，每块约 {chunk_size} 个点。")
+
+
+            # --- 新的并行计算模型 ---
             features = []
-            max_workers = (os.cpu_count() or 1) -1 if (os.cpu_count() or 1) > 1 else 1
-            # 移除 initializer，因为 worker 不再需要初始化任何东西
+            max_workers = (os.cpu_count() or 1) - 1 if (os.cpu_count() or 1) > 1 else 1
+            
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-                # 将准备好的轻量级任务提交给 worker
-                future_to_point = {
-                    executor.submit(_worker_calculate_score, *task_args): task_args[:2] # 映射到 (lat, lon)
-                    for task_args in tasks_for_workers
+                # 提交新的块处理任务
+                future_to_chunk = {
+                    executor.submit(_worker_process_chunk, chunk, event_name): chunk
+                    for chunk in point_chunks
                 }
                 
-                for future in concurrent.futures.as_completed(future_to_point):
+                for future in concurrent.futures.as_completed(future_to_chunk):
                     try:
-                        result = future.result()
-                        if result and 'score' in result:
+                        # 每个 future 返回的是一个结果列表
+                        chunk_results = future.result()
+                        for result in chunk_results:
                             lon_180 = result['lon'] if result['lon'] <= 180 else result['lon'] - 360
                             features.append({
                                 "type": "Feature",
@@ -197,10 +234,9 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
                                 "properties": {"score": result["score"]}
                             })
                     except Exception as exc:
-                        point = future_to_point[future]
-                        logger.error(f"格点 {point} 的计算在主进程收集结果时生成了异常: {exc}", exc_info=True)
-            
-            # (后续的 GeoJSON 生成和保存逻辑保持不变)
+                        logger.error(f"一个数据处理块在主进程收集结果时生成了异常: {exc}", exc_info=True)
+
+
             logger.info(f"指数计算完成，共生成 {len(features)} 个有效特征点。")
             final_geojson = {
                 "type": "FeatureCollection", 
