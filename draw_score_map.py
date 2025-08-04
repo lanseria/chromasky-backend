@@ -24,7 +24,6 @@ from app.core.download_config import (
     CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM
 )
 
-# --- 关键修复：导入 shapely 2.0+ 的正确合并函数 ---
 from shapely import union_all
 
 # (clean_dataset_coords 函数保持不变)
@@ -72,13 +71,10 @@ def get_event_polygon_for_batch(event_type_prefix: str, time_list: List[str]) ->
         logger.error(f"无法为事件 '{event_type_prefix}' 的任何时间点计算地理区域。")
         return None
     
-    # --- 关键修复：使用 shapely.union_all() 代替旧的 cascaded_union ---
     merged_polygon = union_all(all_polygons)
     logger.info(f"成功合并地理区域，总面积: {merged_polygon.area:.2f} (平方度)。")
     return merged_polygon
 
-# (calculate_composite_score_grid, draw_map, 和 __main__ 部分保持不变)
-# ...
 def calculate_composite_score_grid(
     event_type_prefix: str, 
     time_suffixes: List[str], 
@@ -93,7 +89,6 @@ def calculate_composite_score_grid(
     for suffix in time_suffixes:
         event_name = f"{event_type_prefix}_{suffix}"
         logger.info(f"===== 开始处理子事件: {event_name} =====")
-        # (这里是单个事件的计算逻辑，基本和之前一样)
         df = DataFetcher(force_reload=True)
         if event_name not in df.gfs_datasets:
             logger.warning(f"跳过子事件: {event_name}，数据未找到。")
@@ -143,7 +138,7 @@ def calculate_composite_score_grid(
         logger.error(f"未能为事件 '{event_type_prefix}' 计算任何子事件的分数。")
         return None
 
-    # --- 关键步骤：合并所有分数矩阵 ---
+    # --- 合并所有分数矩阵 ---
     # 将所有 DataArray 拼接成一个新的、带有 'time_batch' 维度的 DataArray
     composite_da = xr.concat(all_scores, dim='time_batch')
     # 沿着 'time_batch' 维度取最大值，得到最终的综合分数
@@ -218,15 +213,14 @@ def draw_map(score_grid: xr.DataArray, event_name: EventType, output_path: Path)
     
     levels = np.linspace(2, 10, 100)
     
-    contour_fill = ax.contourf(lons, lats, scores, levels=levels, cmap=chromasky_cmap, 
-                               transform=ccrs.PlateCarree(), extend='max', zorder=1)
+    contour_fill = ax.contourf(lons, lats, scores, levels=levels, cmap=chromasky_cmap, transform=ccrs.PlateCarree(), extend='max', zorder=1)
     
     contour_lines = ax.contour(lons, lats, scores, 
-                               levels=[4, 6, 8, 9],
-                               colors='white', 
-                               linewidths=[0.5, 0.8, 1.2, 1.5],
-                               alpha=0.6,
-                               transform=ccrs.PlateCarree(), zorder=2)
+                                levels=[4, 6, 8, 9],
+                                colors='white', 
+                                linewidths=[0.5, 0.8, 1.2, 1.5],
+                                alpha=0.6,
+                                transform=ccrs.PlateCarree(), zorder=2)
     ax.clabel(contour_lines, inline=True, fontsize=8, fmt='%1.0f', colors='white')
 
     ax.add_feature(cfeature.OCEAN.with_scale('50m'), facecolor='#0c0a09', zorder=-1)
@@ -235,7 +229,7 @@ def draw_map(score_grid: xr.DataArray, event_name: EventType, output_path: Path)
     ax.add_feature(cfeature.BORDERS.with_scale('50m'), linestyle=':', edgecolor='#78716c', zorder=3)
 
     gl = ax.gridlines(crs=ccrs.PlateCarree(), draw_labels=True,
-                      linewidth=0.5, color='#44403c', alpha=0.8, linestyle='--')
+                        linewidth=0.5, color='#44403c', alpha=0.8, linestyle='--')
     gl.top_labels = False
     gl.right_labels = False
     gl.xlabel_style = {'color': 'white', 'size': 8}
@@ -243,11 +237,11 @@ def draw_map(score_grid: xr.DataArray, event_name: EventType, output_path: Path)
 
     forecast_time_utc_str = "N/A"
     if 'datetime_for_title' in score_grid.coords:
-       ts = pd.to_datetime(score_grid.datetime_for_title.values)
-       forecast_time_utc_str = ts.strftime('%Y-%m-%d %H:%M UTC')
+        ts = pd.to_datetime(score_grid.datetime_for_title.values)
+        forecast_time_utc_str = ts.strftime('%Y-%m-%d %H:%M UTC')
 
     ax.set_title(f"ChromaSky Index Forecast - {event_name.replace('_', ' ').title()}\nValid for {forecast_time_utc_str}",
-                 fontsize=16, color='white')
+                    fontsize=16, color='white')
     
     cbar = fig.colorbar(contour_fill, ax=ax, orientation='vertical', pad=0.02, shrink=0.8,
                         ticks=[2, 4, 6, 8, 10])
@@ -263,7 +257,6 @@ def draw_map(score_grid: xr.DataArray, event_name: EventType, output_path: Path)
 
 
 if __name__ == "__main__":
-    # --- 新增：设置命令行参数解析 ---
     import argparse
     parser = argparse.ArgumentParser(description="生成火烧云指数预报图。")
     

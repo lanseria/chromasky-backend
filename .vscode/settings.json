@@ -1,15 +1,31 @@
 {
   "cSpell.words": [
+    "Carree",
     "cartopy",
+    "cbar",
     "ccrs",
     "cfeature",
     "cfgrib",
+    "clabel",
+    "cmap",
+    "contourf",
+    "getp",
     "grib",
     "hcdc",
+    "interp",
+    "isel",
     "lcdc",
     "lons",
     "mcdc",
     "mcolors",
-    "tcdc"
+    "ndimage",
+    "setp",
+    "tcdc",
+    "ufunc",
+    "xlabel",
+    "yaxis",
+    "ylabel",
+    "yticklabels",
+    "zorder"
   ]
 }
