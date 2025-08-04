@@ -5,38 +5,64 @@
 1.  **API 端点**：提供查询特定地理坐标、特定事件（如今日日落）的火烧云指数。
 2.  **静态 GeoJSON 文件**：为前端地图生成预先计算好的格点数据，展示大范围内的指数分布。
 
-### 核心工作流程
+好的，我已经仔细阅读并理解了您提供的所有项目文件。
 
-整个系统的工作流程可以分为三个主要阶段：**数据采集**、**数据处理**和**数据服务**。
+这是一个目标明确、结构清晰的后端项目，名为 `chromasky-backend`。其核心功能是**预测和可视化特定时间的“火烧云”天象指数**。
 
-1.  **数据采集 (由 `scheduler.py` 驱动)**
-    *   **调度入口**：`scheduler.py` 是整个自动化流程的起点，它按顺序执行 CAMS 和 GFS 的数据下载任务。
-    *   **CAMS AOD 数据**：`app/tasks/cams_tasks.py` 负责使用 `cdsapi` 从哥白尼服务下载气溶胶光学厚度（AOD）数据。它会智能判断应下载前一天还是当天的预报，并将数据和清单文件（`manifest_aod.json`）保存在 `grib_data/cams_aod/` 目录下。
-    *   **GFS 云图数据**：`app/tasks/gfs_tasks.py` 负责下载核心的 GFS 气象数据。它会自动判断当前可用的最新 GFS 运行周期（例如 `00z`, `06z` 等），然后计算未来几个关键事件（今日/明日的日出日落）的预报时间点。接着，它调用 `app/services/grib_downloader.py` 下载不同层级和类型的云量、云底高度等 GRIB 文件，并按事件组织文件结构，最后生成一个运行周期的总清单（如 `manifest_20250802_00.json`）。
+### 1. 核心流程
 
-2.  **数据处理 (由 `app/tasks/processing_tasks.py` 负责)**
-    *   **触发机制**：GFS 数据下载成功后，会立即触发 `run_geojson_generation_task` 任务。
-    *   **数据加载**：该任务首先会强制 `DataFetcher` 单例重新加载数据，以确保它能读取到刚刚下载的最新 GRIB 文件。
-    *   **计算与生成**：它使用 `ChromaSkyCalculator`，为每个事件（如 `today_sunset`）的所有格点并行计算火烧云指数，并将结果生成为高密度的 GeoJSON 文件。
-    *   **清单更新**：生成好的 GeoJSON 文件被保存在 `frontend/gfs/{run_id}/` 目录下。同时，它会更新一个位于 `frontend/gfs/` 的主清单文件 `gfs_data_manifest.json`，将 `latest_run` 指向刚刚完成的这批数据，方便前端应用直接加载。
+项目的整个生命周期可以分为三个主要阶段：
 
-3.  **数据服务 (由 `app/main.py` 和 FastAPI 提供)**
-    *   **启动预加载**：当 FastAPI 应用启动时，`lifespan` 管理器会初始化 `DataFetcher` 单例，它会根据最新的清单文件将 GRIB 数据加载到内存中，以 `xarray.Dataset` 的形式缓存，从而实现快速查询。
-    *   **API 接口**：`app/api/v1/endpoints/chromasky.py` 中定义了几个核心 API：
-        *   `/`: 查询单个点的实时指数，它会利用内存中的数据进行快速计算。
-        *   `/map_data`: 动态生成指定密度的地图数据（作为静态文件的补充或动态查询方式）。
-        *   `/data_check`: 一个非常实用的调试接口，用于查看某个点的原始气象数据和计算因子。
-    *   **静态文件服务**：FastAPI 同时将 `frontend` 目录作为静态文件目录，使得前端可以直接请求 `gfs_data_manifest.json` 以及其指向的各个 GeoJSON 文件。
+1.  **数据采集 (调度任务)**：由 `scheduler.py` 驱动，定期从 `NOAA` (GFS气象数据) 和 `Copernicus` (CAMS气溶胶数据) 下载原始的 GRIB 格式预报数据。
+2.  **数据处理 (调度任务)**：下载完成后，立即触发 `processing_tasks.py`。这个模块是项目的计算核心，它会：
+    *   根据天文算法 (`astronomy_service.py`) 计算出特定事件（如日落）在指定时间窗口内发生的地理区域（一个多边形）。
+    *   筛选出落在这个区域内的 GFS 格点。
+    *   **并行地**（使用多进程）为每个格点计算“火烧云指数”。
+    *   将计算结果保存为 GeoJSON 文件，供前端直接使用。
+    *   更新一个主清单文件 (`gfs_data_manifest.json`)，告知前端最新的数据路径。
+3.  **数据服务与展示 (API与前端)**：
+    *   一个 FastAPI Web 服务器 (`app/main.py`) 启动，并预加载最新的气象数据到内存中 (`DataFetcher` 单例)。
+    *   服务器对外提供 API 接口，用于查询单点的详细指数和原始数据。
+    *   同时，它也作为静态文件服务器，将 `frontend/index.html` 和处理好的 GeoJSON 文件提供给浏览器。
+    *   前端页面 (`index.html`) 通过读取主清单文件，动态加载并用 MapLibre GL JS 在地图上渲染出火烧云指数的热力图。
 
-### 关键模块和技术栈
+### 2. 关键模块分析
 
-*   **FastAPI & Uvicorn**: 提供了高性能的异步 Web 服务框架。
-*   **xarray & cfgrib**: 项目的核心，用于读取和操作 GRIB 格式的气象数据。我注意到您在 `data_fetcher.py` 中使用了 `backend_kwargs={'filter_by_keys': {'stepType': 'instant'}}` 来解决 GRIB 文件中可能存在的键冲突问题，这是处理复杂 GRIB 数据的正确实践。
-*   **Requests & cdsapi**: 用于从外部 HTTP 服务（NOAA NOMADS）和 API（Copernicus）下载数据。
-*   **`DataFetcher` (单例模式)**: 设计巧妙的数据缓存中心，通过在应用启动时预加载，极大地提升了 API 响应速度。
-*   **`ChromaSkyCalculator`**: 封装了项目的核心算法和业务逻辑，将原始气象数据转化为最终的“火烧云指数”。
-*   **`scheduler.py` & `app/tasks/*`**: 构成了一个健壮的后台任务调度和执行系统，实现了数据获取和处理的自动化。
-*   **`debug_grib.py`**: 一个独立的调试工具，表明您在开发过程中对 GRIB 文件复杂性的深入研究。
+*   **调度器 (`scheduler.py`, `app/tasks/`)**:
+    *   这是整个自动化流程的入口。
+    *   `gfs_tasks.py` 和 `cams_tasks.py` 职责明确，分别负责下载两种不同来源的数据。
+    *   任务设计具有幂等性，会检查清单文件，如果数据已存在则跳过，避免重复下载。
+
+*   **数据处理核心 (`app/tasks/processing_tasks.py`)**:
+    *   **性能优化是亮点**：它没有对全球所有格点进行计算，而是先通过 `astronomy_service` 框定一个有效的计算区域，极大地减少了计算量。
+    *   **并行计算**：通过 `concurrent.futures.ProcessPoolExecutor` 将繁重的计算任务分配给多个CPU核心，显著缩短了处理时间。
+    *   **进程安全**：通过在每个工作进程中重新初始化 `DataFetcher` 来保证数据访问的独立性，这是一种有效且简单的并行策略。
+
+*   **数据访问层 (`app/services/data_fetcher.py`)**:
+    *   采用**单例模式**，确保在 FastAPI 应用生命周期内，所有数据只从磁盘加载一次，为 API 提供了快速响应能力。
+    *   `force_reload` 参数的设计很巧妙，允许在不同上下文（API服务器 vs. 批处理任务）中灵活控制数据加载。
+    *   它优雅地处理了 GRIB 文件中可能存在的 `stepType` 冲突问题。
+
+*   **科学计算与算法 (`app/services/`)**:
+    *   `astronomy_service.py`: 基于 `ephem` 库，不仅能计算单点的日出日落，还能计算出“等时线”，这是实现“Point-in-Area”优化的关键。
+    *   `chromasky_calculator.py`: 封装了项目的核心商业逻辑——“火烧云指数”的评分函数。这些函数 (`score_local_clouds`, `score_light_path` 等) 将气象数据转化为最终的用户可见分数。
+    *   `grib_downloader.py`: 封装了与 NOAA GFS 数据源的交互细节，使上层任务逻辑更清晰。
+
+*   **API 和前端 (`app/api/`, `frontend/`)**:
+    *   API 设计遵循 RESTful 风格，提供了单点查询、数据调试等多种接口。
+    *   前端 `index.html` 与后端解耦良好，它不关心数据是如何计算的，只通过一个主清单文件 (`gfs_data_manifest.json`) 来发现和加载最新的 GeoJSON 数据，实现了动态更新。
+
+*   **配置 (`app/core/`)**:
+    *   配置分离做得很好，`download_config.py` 集中管理了所有关键参数，如计算区域、时间、数据源变量等，便于调整和维护。
+
+*   **调试工具 (`debug_grib.py`)**:
+    *   提供了一个实用的命令行工具来探查复杂的 GRIB 文件内容，这在开发和调试阶段非常有价值。
+
+总结来说，这是一个设计精良、功能完备的数据驱动型应用。从数据采集、处理、计算到最终的可视化，整个流程自动化且高效。代码结构清晰，职责分离明确。
+
+我已完全理解该项目的架构和实现细节。
+
+好的。
 
 
 ### ChromaSky™ 火烧云指数计算核心算法

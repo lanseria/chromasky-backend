@@ -1,41 +1,18 @@
 # app/tasks/gfs_tasks.py
 import logging
 import json
-from datetime import datetime, timedelta, timezone, time # 确保导入 time
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Tuple
 
-# 从新的位置导入配置
-from app.core.download_config import SUNRISE_CENTER_TIME, SUNSET_CENTER_TIME, LOCAL_TZ
+# --- 从新的位置导入配置和共享的工具函数 ---
 from app.services.grib_downloader import grib_downloader
 from .processing_tasks import run_geojson_generation_task
+from .task_utils import get_target_event_times  # <--- 修改点：从新模块导入
 
 logger = logging.getLogger("GFSTask")
 
-# 这些函数是 gfs_tasks 的内部实现细节，所以用下划线开头
-def _get_target_event_times() -> Dict[str, datetime]:
-    """根据配置计算所有目标事件的中心UTC时间。"""
-    shanghai_tz = ZoneInfo(LOCAL_TZ)
-    now_shanghai = datetime.now(shanghai_tz)
-    
-    today = now_shanghai.date()
-    tomorrow = today + timedelta(days=1)
-
-    # 从字符串配置创建 time 对象
-    sunrise_t = time.fromisoformat(SUNRISE_CENTER_TIME)
-    sunset_t = time.fromisoformat(SUNSET_CENTER_TIME)
-
-    all_events = {
-        # 注意：现在我们只关心这四个核心事件的中心时间点，用于下载数据
-        "today_sunrise": datetime.combine(today, sunrise_t, tzinfo=shanghai_tz),
-        "today_sunset": datetime.combine(today, sunset_t, tzinfo=shanghai_tz),
-        "tomorrow_sunrise": datetime.combine(tomorrow, sunrise_t, tzinfo=shanghai_tz),
-        "tomorrow_sunset": datetime.combine(tomorrow, sunset_t, tzinfo=shanghai_tz),
-    }
-    
-    # 将所有本地时间转换为UTC时间，用于计算预报时效
-    return {name: dt.astimezone(timezone.utc) for name, dt in all_events.items()}
+# 函数 _get_target_event_times 已被移动到 task_utils.py
 
 def _find_latest_available_gfs_run() -> Tuple[str, str]:
     """智能判断当前可用的最新 GFS 运行周期。"""
@@ -74,9 +51,11 @@ def run_gfs_download_task() -> bool:
             logger.info("[GeoJSON] 对应的GeoJSON文件已存在，跳过生成。")
         logger.info("--- [GFS] 任务完成 ---")
         return True
+    
     run_info = {"date": run_date_utc, "run_hour": run_hour_utc}
-    target_events_utc = _get_target_event_times()
+    target_events_utc = get_target_event_times() # <--- 修改点：调用新函数
     logger.info(f"[GFS] 将为以下事件下载数据: {list(target_events_utc.keys())}")
+    
     manifest_content = {}
     for event_name, target_time in target_events_utc.items():
         logger.info(f"[GFS] 开始为事件 '{event_name}' ({target_time.isoformat()}) 下载数据")
@@ -84,12 +63,15 @@ def run_gfs_download_task() -> bool:
         if time_meta and file_paths and all(file_paths.values()):
             str_file_paths = {k: str(v) for k, v in file_paths.items()}
             manifest_content[event_name] = {"time_meta": time_meta, "file_paths": str_file_paths}
+            
     if not manifest_content:
         logger.warning("[GFS] 未能成功为任何事件下载数据，不生成清单和GeoJSON文件。")
         return False
+        
     with open(manifest_path, 'w') as f:
         json.dump(manifest_content, f, indent=4)
     logger.info(f"[GFS] GFS 数据清单已成功写入: {manifest_path}")
+    
     run_geojson_generation_task(manifest_path, run_date_utc, run_hour_utc)
     logger.info("--- [GFS] 任务完成 ---")
     return True

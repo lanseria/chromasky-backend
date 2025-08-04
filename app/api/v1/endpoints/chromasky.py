@@ -10,7 +10,7 @@ from app.services.chromasky_calculator import ChromaSkyCalculator, MapDensity
 from app.services.astronomy_service import AstronomyService
 from app.models.sun_events import SunEventsResponse
 from app.core.download_config import (
-    CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM, LOCAL_TZ)
+    CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM, LOCAL_TZ, LOCAL_LAT, LOCAL_LON)
 
 
 class SunEventType(str, Enum):
@@ -33,8 +33,8 @@ def is_event_valid(event: EventType) -> bool:
 @router.get("/", summary="获取单点火烧云指数")
 def get_chromasky_index(
     event: EventType = Query("today_sunset"),
-    lat: float = Query(31.23, ge=-90, le=90),
-    lon: float = Query(121.47, ge=-180, le=360)
+    lat: float = Query(LOCAL_LAT, ge=-90, le=90),
+    lon: float = Query(LOCAL_LON, ge=-180, le=360)
 ):
     if not is_event_valid(event):
         raise HTTPException(status_code=404, detail=f"事件 '{event}' 已过去或数据不可用。")
@@ -114,8 +114,8 @@ def get_event_area_geojson(
     response_model=SunEventsResponse
 )
 def get_sun_events(
-    lat: float = Query(31.23, description="纬度", ge=-90, le=90),
-    lon: float = Query(121.47, description="经度", ge=-180, le=360),
+    lat: float = Query(LOCAL_LAT, description="纬度", ge=-90, le=90),
+    lon: float = Query(LOCAL_LON, description="经度", ge=-180, le=360),
     target_date_str: str = Query(
         default_factory=lambda: date.today().isoformat(),
         description="目标日期，格式为 YYYY-MM-DD",

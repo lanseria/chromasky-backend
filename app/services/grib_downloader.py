@@ -3,7 +3,7 @@ import requests
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from app.core.download_config import GFS_BASE_URL, GFS_DATA_BLOCKS, SUBREGION_PARAMS, DOWNLOAD_DIR
+from app.core.download_config import GFS_BASE_URL, GFS_DATA_BLOCKS, DOWNLOAD_DIR
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,11 +23,7 @@ class GribDownloader:
         
         params = { "dir": dir_path, "file": file_name }
         
-        # --- 新增逻辑：仅在配置了子区域时才添加区域参数 ---
-        if SUBREGION_PARAMS.get("subregion"):
-            params.update(SUBREGION_PARAMS)
-        else:
-            logger.info("未配置子区域，将下载全球数据。")
+        logger.info("将下载全球数据。")
             
         for var in block_config["vars"]:
             params[f"var_{var.upper()}"] = "on"
