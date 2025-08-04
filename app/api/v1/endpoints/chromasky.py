@@ -4,12 +4,13 @@ from typing import Any
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from enum import Enum
-import re
 
 from app.services.data_fetcher import DataFetcher, EventType
 from app.services.chromasky_calculator import ChromaSkyCalculator, MapDensity
 from app.services.astronomy_service import AstronomyService
-from app.models.sun_events import SunEventsResponse # 新增的模型
+from app.models.sun_events import SunEventsResponse
+from app.core.download_config import (
+    CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM, LOCAL_TZ)
 
 
 class SunEventType(str, Enum):
@@ -77,7 +78,7 @@ def get_event_area_geojson(
         description="目标日期，格式为 YYYY-MM-DD",
         alias="date"
     ),
-    tz: str = Query("Asia/Shanghai", description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
+    tz: str = Query(LOCAL_TZ, description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
 ):
     """
     计算并返回一个 GeoJSON Polygon，该多边形覆盖了在指定日期和时间窗口内发生特定太阳事件的所有地理区域。
@@ -97,7 +98,8 @@ def get_event_area_geojson(
         target_date=target_date,
         center_time_str=center_time,
         window_minutes=window_minutes,
-        local_tz_str=tz
+        local_tz_str=tz,
+        lat_range=(CALCULATION_LAT_BOTTOM, CALCULATION_LAT_TOP)
     )
 
     if "error" in geojson_data:
@@ -119,7 +121,7 @@ def get_sun_events(
         description="目标日期，格式为 YYYY-MM-DD",
         alias="date" # 允许用户使用 'date' 作为查询参数
     ),
-    tz: str = Query("Asia/Shanghai", description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
+    tz: str = Query(LOCAL_TZ, description="目标时区，例如 'Asia/Shanghai' 或 'UTC'")
 ):
     """
     根据给定的经纬度、日期和时区，计算四个关键的太阳事件时间：

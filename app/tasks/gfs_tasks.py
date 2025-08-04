@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Dict, Tuple
 
 # 从新的位置导入配置
-from app.core.download_config import SUNRISE_CENTER_TIME, SUNSET_CENTER_TIME
+from app.core.download_config import SUNRISE_CENTER_TIME, SUNSET_CENTER_TIME, LOCAL_TZ
 from app.services.grib_downloader import grib_downloader
 from .processing_tasks import run_geojson_generation_task
 
@@ -16,7 +16,7 @@ logger = logging.getLogger("GFSTask")
 # 这些函数是 gfs_tasks 的内部实现细节，所以用下划线开头
 def _get_target_event_times() -> Dict[str, datetime]:
     """根据配置计算所有目标事件的中心UTC时间。"""
-    shanghai_tz = ZoneInfo("Asia/Shanghai")
+    shanghai_tz = ZoneInfo(LOCAL_TZ)
     now_shanghai = datetime.now(shanghai_tz)
     
     today = now_shanghai.date()

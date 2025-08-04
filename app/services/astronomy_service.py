@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, date, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Dict, Optional, List, Tuple, Any
+from app.core.download_config import LOCAL_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,8 @@ class AstronomyService:
         lat: float,
         lon: float,
         target_date: date,
-        local_tz_str: str = "Asia/Shanghai"
+        local_tz_str: str = LOCAL_TZ
     ) -> Dict[str, Optional[str]]:
-        # ... 此方法保持不变，此处省略以保持简洁 ...
         observer = ephem.Observer()
         observer.lat = str(lat)
         observer.lon = str(lon)

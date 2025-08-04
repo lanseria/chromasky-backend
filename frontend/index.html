@@ -76,8 +76,7 @@
 <script>
     const map = new maplibregl.Map({
         container: 'map',
-        // 使用一个更中性的地图样式
-        style: `https://api.maptiler.com/maps/01986ed8-990b-7e6b-8cf8-fd8553ce18f0/style.json?key=COzW8kKwrFCzdf13x98K`, // 替换为你的 MapTiler key
+        style: `https://api.maptiler.com/maps/01986ed8-990b-7e6b-8cf8-fd8553ce18f0/style.json?key=COzW8kKwrFCzdf13x98K`,
         center: [115, 35],
         zoom: 4,
         projection: 'globe'
@@ -98,7 +97,6 @@
         "tomorrow_sunset": "明日日落"
     };
 
-    // --- START OF CHANGE: 更新的函数 ---
     /**
      * 更新地图数据和信息显示
      */

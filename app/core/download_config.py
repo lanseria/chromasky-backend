@@ -1,9 +1,12 @@
 # app/core/download_config.py
 from pathlib import Path
-from enum import Enum # Import Enum
+from enum import Enum
+
+# 本地时区
+LOCAL_TZ = "Asia/Shanghai"
 
 # 限制天文计算和指数计算的纬度范围（不影响数据下载）
-CALCULATION_LAT_TOP = 60.0
+CALCULATION_LAT_TOP = 55.0
 CALCULATION_LAT_BOTTOM = 0.0
 
 # 定义计算密度

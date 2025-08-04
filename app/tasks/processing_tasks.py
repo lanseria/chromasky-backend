@@ -17,7 +17,7 @@ from app.services.chromasky_calculator import score_local_clouds, score_light_pa
 from app.services.astronomy_service import AstronomyService
 from app.core.download_config import (
     SUNRISE_CENTER_TIME, SUNSET_CENTER_TIME, WINDOW_MINUTES,
-    CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM, MapDensity, CALCULATION_DENSITY
+    CALCULATION_LAT_TOP, CALCULATION_LAT_BOTTOM, MapDensity, CALCULATION_DENSITY, LOCAL_TZ
 )
 
 logger = logging.getLogger("ProcessingTask")
@@ -135,7 +135,6 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
         astronomy_service = AstronomyService()
         logger.info("[GeoJSON] 数据加载完成。")
         
-        shanghai_tz = "Asia/Shanghai"
         today = date.today()
         tomorrow = today + timedelta(days=1)
         
@@ -169,7 +168,7 @@ def run_geojson_generation_task(manifest_path: Path, run_date: str, run_hour: st
             target_d = tomorrow if "tomorrow" in event_name else today
             area_geojson = astronomy_service.generate_event_area_geojson(
                 event=event_type, target_date=target_d, center_time_str=center_time,
-                window_minutes=WINDOW_MINUTES, local_tz_str=shanghai_tz, lat_range=lat_range
+                window_minutes=WINDOW_MINUTES, local_tz_str=LOCAL_TZ, lat_range=lat_range
             )
             if "error" in area_geojson or not area_geojson["features"]:
                 logger.error(f"无法计算事件 '{event_name}' 的地理区域，跳过。")
