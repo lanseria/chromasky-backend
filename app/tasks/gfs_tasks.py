@@ -43,13 +43,16 @@ def run_gfs_download_task() -> bool:
     manifest_path = grib_downloader.download_dir / f"manifest_{run_date_utc}_{run_hour_utc}.json"
     if manifest_path.exists():
         logger.info(f"[GFS] 清单文件 '{manifest_path.name}' 已存在，跳过该运行周期的下载。")
-        geojson_output_dir = Path("frontend/gfs") / f"{run_date_utc}_t{run_hour_utc}z"
-        if not geojson_output_dir.exists() or not any(geojson_output_dir.iterdir()):
-            logger.info(f"[GeoJSON] 检测到清单存在但GeoJSON文件缺失，开始补生成...")
-            run_geojson_generation_task(manifest_path, run_date_utc, run_hour_utc)
-        else:
-            logger.info("[GeoJSON] 对应的GeoJSON文件已存在，跳过生成。")
-        logger.info("--- [GFS] 任务完成 ---")
+        # --- 修改点 ---
+        # 由于后续的 GeoJSON 生成任务可能尚未完成，这里暂时不检查其存在性
+        # geojson_output_dir = Path("frontend/gfs") / f"{run_date_utc}_t{run_hour_utc}z"
+        # if not geojson_output_dir.exists() or not any(geojson_output_dir.iterdir()):
+        #     logger.info(f"[GeoJSON] 检测到清单存在但GeoJSON文件缺失，开始补生成...")
+        #     # run_geojson_generation_task(manifest_path, run_date_utc, run_hour_utc) # <--- 已注释
+        # else:
+        #     logger.info("[GeoJSON] 对应的GeoJSON文件已存在，跳过生成。")
+        # --- 修改结束 ---
+        logger.info("--- [GFS] 任务完成 (跳过) ---")
         return True
     
     run_info = {"date": run_date_utc, "run_hour": run_hour_utc}
@@ -72,6 +75,9 @@ def run_gfs_download_task() -> bool:
         json.dump(manifest_content, f, indent=4)
     logger.info(f"[GFS] GFS 数据清单已成功写入: {manifest_path}")
     
-    run_geojson_generation_task(manifest_path, run_date_utc, run_hour_utc)
+    # --- 主要修改点：暂时禁用 GeoJSON 生成 ---
+    logger.info("[GeoJSON] 生成任务已在此处禁用，仅完成数据下载。")
+    # run_geojson_generation_task(manifest_path, run_date_utc, run_hour_utc) # <--- 已注释
+    # --- 修改结束 ---
     logger.info("--- [GFS] 任务完成 ---")
     return True

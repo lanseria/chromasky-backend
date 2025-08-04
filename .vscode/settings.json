@@ -1,8 +1,15 @@
 {
   "cSpell.words": [
+    "cartopy",
+    "ccrs",
+    "cfeature",
     "cfgrib",
     "grib",
+    "hcdc",
+    "lcdc",
     "lons",
+    "mcdc",
+    "mcolors",
     "tcdc"
   ]
 }

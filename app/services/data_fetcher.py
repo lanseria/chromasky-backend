@@ -28,21 +28,18 @@ class DataFetcher:
     _instance = None
     _lock = threading.Lock()
 
-    def __new__(cls, *args, **kwargs): # 允许传递参数
+    def __new__(cls, *args, **kwargs):
         if not cls._instance:
             with cls._lock:
                 if not cls._instance:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    # --- 修改此方法 ---
     def __init__(self, force_reload=False):
-        # 检查是否需要重新加载
         if hasattr(self, '_initialized') and not force_reload:
             return
             
         with self._lock:
-            # 双重检查锁，确保在等待锁期间没有其他线程完成初始化
             if hasattr(self, '_initialized') and not force_reload:
                 return
             
@@ -51,6 +48,8 @@ class DataFetcher:
             self.gfs_time_metadata: Dict[EventType, dict] = {}
             self.aod_dataset: xr.Dataset | None = None
             self.aod_time_metadata: dict = {}
+            # --- 新增属性 ---
+            self.aod_base_time: datetime | None = None
             
             self._load_all_data_from_disk()
             
@@ -64,7 +63,7 @@ class DataFetcher:
         return manifest_files[0] if manifest_files else None
 
     def _load_all_data_from_disk(self):
-        # 1. 加载 GFS 数据
+        # GFS 加载逻辑保持不变...
         latest_gfs_manifest_path = self._find_latest_manifest("manifest_*_[0-9][0-9].json")
         if latest_gfs_manifest_path:
             logger.info(f"[GFS] 正在从 GFS 清单加载: {latest_gfs_manifest_path.name}")
@@ -78,7 +77,6 @@ class DataFetcher:
                     path = Path(path_str)
                     if path.exists():
                         try:
-                            # --- START OF CHANGE: 添加 backend_kwargs 来处理冲突 ---
                             backend_kwargs = {'filter_by_keys': {'stepType': 'instant'}}
                             ds = xr.open_dataset(
                                 path, 
@@ -86,12 +84,9 @@ class DataFetcher:
                                 decode_timedelta=False,
                                 backend_kwargs=backend_kwargs
                             )
-                            # --- END OF CHANGE ---
                             datasets_to_merge.append(ds)
-                            # 日志移到 try 块的末尾，确保成功加载才打印
                             logger.info(f"[GFS]   > 成功加载文件: {path.name} (for event: {event_name})")
                         except Exception as e:
-                            # 保持详细的错误日志
                             logger.error(f"[GFS]   > 加载文件 {path.name} (for event: {event_name}) 时出错: {e}", exc_info=True)
                     else:
                         logger.warning(f"[GFS]   > 文件未找到，已跳过: {path}")
@@ -100,22 +95,27 @@ class DataFetcher:
                     self.gfs_datasets[event_name] = xr.merge(datasets_to_merge)
                     logger.info(f"[GFS] ==> 事件 '{event_name}' 的数据集已成功加载并缓存。")
                 else:
-                    # 如果一个事件的所有文件都加载失败，也需要记录
                     logger.error(f"[GFS] 事件 '{event_name}' 没有成功加载任何数据文件。")
         else:
             logger.error("[GFS] 未找到任何 GFS 数据清单。")
 
-        # 2. 加载 AOD 数据
+        # AOD 加载逻辑修改
         aod_base_dir = grib_downloader.download_dir / "cams_aod"
         latest_aod_manifest_path = self._find_latest_manifest("manifest_aod.json", search_dir=aod_base_dir)
         if latest_aod_manifest_path:
             logger.info(f"[CAMS_AOD] 正在从 AOD 清单加载: {latest_aod_manifest_path.name}")
             with open(latest_aod_manifest_path, 'r') as f:
                 aod_manifest = json.load(f)
+            
+            # --- 修改点：存储基准时间 ---
             self.aod_time_metadata = aod_manifest
+            if "base_time_utc" in aod_manifest:
+                self.aod_base_time = datetime.fromisoformat(aod_manifest["base_time_utc"])
+
             aod_file_path = Path(aod_manifest["file_path"])
             if aod_file_path.exists():
                 try:
+                    # 使用 decode_timedelta=False，我们将手动处理时间
                     self.aod_dataset = xr.open_dataset(aod_file_path, engine="cfgrib", decode_timedelta=False)
                     logger.info("[CAMS_AOD] ==> AOD 数据集已成功加载并缓存。")
                 except Exception as e:
@@ -125,6 +125,7 @@ class DataFetcher:
         else:
             logger.warning("[CAMS_AOD] 未找到任何 AOD 数据清单。")
 
+    # 其他函数 get_light_path_avg_cloudiness, get_aod_for_event 等保持不变...
     def get_light_path_avg_cloudiness(self, lat: float, lon: float, event: EventType) -> float | None:
         dataset = self.gfs_datasets.get(event)
         time_meta = self.gfs_time_metadata.get(event)

@@ -3,12 +3,13 @@ from datetime import datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 from typing import Dict
 
-from app.core.download_config import SUNRISE_CENTER_TIME, SUNSET_CENTER_TIME, LOCAL_TZ
+# --- 从新的配置中导入列表 ---
+from app.core.download_config import SUNRISE_EVENT_TIMES, SUNSET_EVENT_TIMES, LOCAL_TZ
 
 def get_target_event_times() -> Dict[str, datetime]:
     """
-    根据配置计算所有目标事件（日出/日落）的中心UTC时间。
-    这是一个共享的工具函数，供所有需要目标时间的任务使用。
+    根据配置中的时间列表，计算所有目标事件的中心UTC时间。
+    (已更新为处理多个时间点)
     """
     shanghai_tz = ZoneInfo(LOCAL_TZ)
     now_shanghai = datetime.now(shanghai_tz)
@@ -16,17 +17,21 @@ def get_target_event_times() -> Dict[str, datetime]:
     today = now_shanghai.date()
     tomorrow = today + timedelta(days=1)
 
-    # 从字符串配置创建 time 对象
-    sunrise_t = time.fromisoformat(SUNRISE_CENTER_TIME)
-    sunset_t = time.fromisoformat(SUNSET_CENTER_TIME)
+    all_events = {}
 
-    all_events = {
-        # 注意：现在我们只关心这四个核心事件的中心时间点，用于下载数据
-        "today_sunrise": datetime.combine(today, sunrise_t, tzinfo=shanghai_tz),
-        "today_sunset": datetime.combine(today, sunset_t, tzinfo=shanghai_tz),
-        "tomorrow_sunrise": datetime.combine(tomorrow, sunrise_t, tzinfo=shanghai_tz),
-        "tomorrow_sunset": datetime.combine(tomorrow, sunset_t, tzinfo=shanghai_tz),
-    }
+    # 遍历日出时间列表
+    for t_str in SUNRISE_EVENT_TIMES:
+        event_time = time.fromisoformat(t_str)
+        time_suffix = t_str.replace(":", "") # e.g., "0500"
+        all_events[f"today_sunrise_{time_suffix}"] = datetime.combine(today, event_time, tzinfo=shanghai_tz)
+        all_events[f"tomorrow_sunrise_{time_suffix}"] = datetime.combine(tomorrow, event_time, tzinfo=shanghai_tz)
+
+    # 遍历日落时间列表
+    for t_str in SUNSET_EVENT_TIMES:
+        event_time = time.fromisoformat(t_str)
+        time_suffix = t_str.replace(":", "") # e.g., "1700"
+        all_events[f"today_sunset_{time_suffix}"] = datetime.combine(today, event_time, tzinfo=shanghai_tz)
+        all_events[f"tomorrow_sunset_{time_suffix}"] = datetime.combine(tomorrow, event_time, tzinfo=shanghai_tz)
     
-    # 将所有本地时间转换为UTC时间，用于计算预报时效
+    # 将所有本地时间转换为UTC时间
     return {name: dt.astimezone(timezone.utc) for name, dt in all_events.items()}

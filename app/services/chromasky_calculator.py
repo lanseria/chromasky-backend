@@ -15,15 +15,42 @@ class MapDensity(str, Enum):
     low = "low"
     medium = "medium"
     high = "high"
-
 def score_local_clouds(high_cloud: float | None, medium_cloud: float | None) -> float:
-    if high_cloud is None or medium_cloud is None: return 0.0
-    canvas_cloud_cover = high_cloud + medium_cloud
-    return 1.0 if canvas_cloud_cover >= 20.0 else 0.1
+    """
+    因子A：本地“画布”云评分（20%阈值递增模型）
+    - 中高云总量达到 20% 或以上，即为最佳状态，得满分 1.0。
+    - 低于 20% 时，分数从一个基础分开始，随云量线性增长至 1.0。
+    """
+    if high_cloud is None or medium_cloud is None:
+        return 0.0
+
+    # 中高云总覆盖度，单位是百分比 (0-100)
+    canvas_cover = high_cloud + medium_cloud
+    
+    # --- 定义新规则的边界和得分 ---
+    
+    # 阈值，达到此值即为最佳
+    optimal_threshold = 20.0
+
+    # 基础分，适用于晴空无云(0%)的情况
+    base_score = 0
+
+    # 1. 如果云量达到或超过阈值，直接返回满分
+    if canvas_cover >= optimal_threshold:
+        return 1.0
+    
+    # 2. 如果云量低于阈值，进行线性插值
+    #    分数将在 [0, optimal_threshold] 的范围内，从 base_score 增长到 1.0
+    else:
+        # 计算当前进度的百分比 (0 到 1)
+        progress = canvas_cover / optimal_threshold
+        
+        # 在 base_score 和 1.0 之间进行线性插值
+        return base_score + (1.0 - base_score) * progress
 
 def score_light_path(avg_tcc_along_path: float | None) -> float:
     if avg_tcc_along_path is None: return 0.0
-    return ((100.0 - avg_tcc_along_path) / 100.0) ** 2
+    return ((100.0 - avg_tcc_along_path) / 100.0) ** 1.2
 
 def score_air_quality(aod: float | None) -> float:
     if aod is None or np.isnan(aod): return 0.5

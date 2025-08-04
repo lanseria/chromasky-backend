@@ -79,6 +79,7 @@
         style: `https://api.maptiler.com/maps/01986ed8-990b-7e6b-8cf8-fd8553ce18f0/style.json?key=COzW8kKwrFCzdf13x98K`,
         center: [115, 35],
         zoom: 4,
+        hash: true,
         projection: 'globe'
     });
 
@@ -175,7 +176,7 @@
                 id: 'chromasky-heatmap',
                 type: 'heatmap',
                 source: 'chromasky-data',
-                maxzoom: 6,
+                maxzoom: 7,
                 paint: {
                     'heatmap-weight': ['interpolate', ['linear'], ['get', 'score'], 0, 0, 10, 1],
                     'heatmap-intensity': ['interpolate', ['linear'], ['zoom'], 3, 1, 6, 3],
