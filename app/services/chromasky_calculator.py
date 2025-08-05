@@ -5,7 +5,6 @@ from typing import Dict, Any
 from enum import Enum
 import concurrent.futures
 import os
-import xarray as xr
 
 from .data_fetcher import DataFetcher, EventType
 

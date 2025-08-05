@@ -3,7 +3,9 @@ map_images
 historical_data
 historical_maps
 map_data
+historical_maps_full
 debug_maps
+forecast_data
 ai/project_context.txt
 .DS_Store
 __pycache__

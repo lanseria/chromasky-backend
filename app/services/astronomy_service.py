@@ -1,10 +1,12 @@
 # app/services/astronomy_service.py
 import ephem
 import logging
+import numpy as np
 from datetime import datetime, date, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Dict, Optional, List, Tuple, Any
 from app.core.download_config import LOCAL_TZ
+import xarray as xr
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,62 @@ class AstronomyService:
     提供基于地理坐标和日期的天文事件计算服务。
     """
 
+
+class AstronomyService:
+    def __init__(self):
+        # 可以在这里初始化一些常用的对象，如果需要的话
+        pass
+
+    def get_sun_position(self, lat: float, lon: float, utc_time: datetime) -> dict:
+        """
+        计算指定地点和时间的太阳位置（高度角和方位角）。
+        这是底层的核心计算方法。
+
+        Args:
+            lat (float): 纬度
+            lon (float): 经度
+            utc_time (datetime): UTC时间
+
+        Returns:
+            dict: 包含 'altitude' 和 'azimuth' 的字典，单位为度。
+        """
+        observer = ephem.Observer()
+        observer.lat = str(lat)
+        observer.lon = str(lon)
+        observer.date = utc_time
+        observer.pressure = 0  # 忽略大气折射效应，或设为标准大气压1010
+        observer.horizon = '-0:34' # 考虑太阳半径的标准地平线
+
+        sun = ephem.Sun()
+        sun.compute(observer)
+
+        # ephem 返回的是弧度，需要转换为度
+        return {
+            "altitude": np.degrees(sun.alt),
+            "azimuth": np.degrees(sun.az)
+        }
+
+    def get_sun_altitude_grid(self, lats: xr.DataArray, lons: xr.DataArray, utc_time: datetime) -> xr.DataArray:
+        """
+        为整个经纬度网格计算太阳高度角。
+        这个方法现在可以正确调用 get_sun_position 了。
+        """
+        # 创建一个与输入网格形状相同的空数组
+        altitude_grid = np.full((len(lats), len(lons)), np.nan)
+        
+        # 遍历网格计算
+        for i, lat in enumerate(lats.values):
+            for j, lon in enumerate(lons.values):
+                # 现在 self.get_sun_position 存在了
+                sun_pos = self.get_sun_position(lat, lon, utc_time)
+                altitude_grid[i, j] = sun_pos['altitude']
+        
+        return xr.DataArray(
+            altitude_grid, 
+            coords={'latitude': lats, 'longitude': lons}, 
+            dims=['latitude', 'longitude']
+        )
+    
     def calculate_sun_events(
         self,
         lat: float,

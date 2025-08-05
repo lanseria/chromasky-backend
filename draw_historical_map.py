@@ -1,9 +1,10 @@
-# draw_historical_map.py (v16 - Final Logic and Merge Fix)
+# draw_historical_map.py (v19 - Use Centralized Map Drawer)
 import argparse
 import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+import sys
 
 import numpy as np
 import pandas as pd
@@ -12,23 +13,30 @@ from shapely import contains, points
 from shapely.geometry import Polygon
 import cfgrib
 
-try:
-    from draw_score_map import draw_map, WINDOW_MINUTES, CALCULATION_LAT_BOTTOM, CALCULATION_LAT_TOP
-    from app.services.astronomy_service import AstronomyService
-    from shapely import union_all
-except ImportError:
-    print("错误: 无法导入 'draw_score_map' 或 'app' 模块。")
-    exit(1)
+# --- 关键修复：确保项目根目录在 Python 搜索路径中 ---
+FILE = Path(__file__).resolve()
+ROOT = FILE.parent.parent # 该脚本在根目录，所以父目录是根
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
+# --- 修复结束 ---
 
 try:
+    # --- 关键修改：从 tools.map_drawer 导入绘图函数 ---
+    from tools.map_drawer import generate_map_from_grid
+    
+    # 导入其他需要的模块
+    from app.core.download_config import (
+        LOCAL_TZ, SUNRISE_EVENT_TIMES, SUNSET_EVENT_TIMES,
+        WINDOW_MINUTES, CALCULATION_LAT_BOTTOM, CALCULATION_LAT_TOP
+    )
+    from app.services.astronomy_service import AstronomyService
+    from shapely import union_all
     from app.services.chromasky_calculator import (
         score_local_clouds, score_cloud_altitude
     )
-    from app.core.download_config import (
-        LOCAL_TZ, SUNRISE_EVENT_TIMES, SUNSET_EVENT_TIMES
-    )
-except ImportError:
-    print("错误: 无法从 'app' 目录导入模块。")
+except ImportError as e:
+    print(f"❌ 关键模块导入失败: {e}")
+    print("请确保你从项目的根目录运行此脚本，并且所有依赖已安装。")
     exit(1)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -47,54 +55,47 @@ class HistoricalDataFetcher:
         self.target_date, self.source = target_date, source
         self.data_dir = Path("historical_data") / target_date.strftime('%Y-%m-%d') / source
         self.dataset = None
+        self.time_coord_name = None
         if not self.data_dir.exists(): raise FileNotFoundError(f"未找到数据目录: {self.data_dir}")
         self._load_data()
 
     def _load_data(self):
-        grib_file_path_list = sorted(list(self.data_dir.glob("*.grib")))
-        if not grib_file_path_list: raise FileNotFoundError(f"在 {self.data_dir} 中未找到任何GRIB文件。")
+        netcdf_file = self.data_dir / "era5_data.nc"
+        if not netcdf_file.exists():
+            raise FileNotFoundError(f"在 {self.data_dir} 中未找到优化的数据文件 (era5_data.nc)。请先运行 download_historical_data.py。")
+
         try:
-            logger.info(f"正在从 {len(grib_file_path_list)} 个GRIB文件中加载数据...")
+            logger.info(f"正在从优化的 NetCDF 文件加载数据: {netcdf_file.name}")
+            ds = xr.open_dataset(netcdf_file)
             
-            final_ds = None
+            possible_time_names = ['valid_time', 'time', 't']
+            for name in possible_time_names:
+                if name in ds.coords:
+                    self.time_coord_name = name
+                    logger.info(f"成功检测到时间坐标为: '{name}'")
+                    break
+            
+            if self.time_coord_name is None:
+                raise ValueError(f"无法在数据集中找到任何已知的时间坐标 (已尝试: {possible_time_names})。")
+
+            if self.time_coord_name != 'time':
+                logger.info(f"将时间坐标从 '{self.time_coord_name}' 重命名为 'time' 以实现兼容性。")
+                ds = ds.rename({self.time_coord_name: 'time'})
+                self.time_coord_name = 'time'
+
+            self.dataset = ds.load()
+            
             expected_vars = ['hcc', 'mcc', 'tcc', 'cbh']
-
-            for var_name in expected_vars:
-                logger.info(f"--- 正在为变量 '{var_name}' 加载所有GRIB文件 ---")
-                var_ds_list = []
-                for grib_path in grib_file_path_list:
-                    try:
-                        ds_var = xr.open_dataset(grib_path, engine="cfgrib", backend_kwargs={'filter_by_keys': {'shortName': var_name}})
-                        coords_to_keep = ['time', 'latitude', 'longitude']
-                        coords_to_drop = [coord for coord in ds_var.coords if coord not in coords_to_keep]
-                        if coords_to_drop:
-                            ds_var = ds_var.drop_vars(coords_to_drop)
-                        var_ds_list.append(ds_var)
-                    except Exception: 
-                        logger.warning(f"  > 在文件 {grib_path.name} 中未找到变量 '{var_name}' 或加载失败，已跳过。")
-                
-                if not var_ds_list: 
-                    logger.error(f"  > 错误: 在任何文件中都未能加载变量 '{var_name}'。"); continue
-                
-                full_var_ds = xr.concat(var_ds_list, dim="time")
-                _, index = np.unique(full_var_ds['time'], return_index=True)
-                full_var_ds = full_var_ds.isel(time=index)
-
-                # --- 关键修复：迭代式合并 ---
-                if final_ds is None:
-                    final_ds = full_var_ds
-                else:
-                    final_ds = final_ds.merge(full_var_ds)
-
-            if final_ds is None or not all(var in final_ds for var in expected_vars):
-                raise ValueError("GRIB 文件加载或合并后不完整。")
+            if not all(var in self.dataset for var in expected_vars):
+                 raise ValueError(f"NetCDF 文件不完整，缺少变量。")
             
-            self.dataset = final_ds.sortby('time').load()
-            logger.info("所有GRIB文件已成功加载并合并。")
+            logger.info("所有数据已成功加载。")
             time_range = (self.dataset.time.min().values, self.dataset.time.max().values)
-            logger.info(f"  > 最终数据集的UTC时间范围: {pd.to_datetime(str(time_range[0]))} to {pd.to_datetime(str(time_range[1]))}")
+            logger.info(f"  > 数据集的UTC时间范围: {pd.to_datetime(str(time_range[0]))} to {pd.to_datetime(str(time_range[1]))}")
+        
         except Exception as e: 
-            logger.error(f"加载或处理 GRIB 文件时发生严重错误: {e}", exc_info=True); raise
+            logger.error(f"加载 NetCDF 文件 '{netcdf_file.name}' 时发生严重错误: {e}", exc_info=True)
+            raise
 
     def get_data_for_time(self, target_time_utc: datetime) -> xr.Dataset | None:
         if self.dataset is None: return None
@@ -107,7 +108,6 @@ class HistoricalDataFetcher:
             logger.error(f"在为 {target_time_utc.isoformat()} 选择数据时出错: {e}", exc_info=True); return None
 
 def get_event_polygon_for_batch_historical(event_type_prefix: str, time_list: list[str], target_date_override: date) -> Polygon | None:
-    # ... (same as before)
     logger.info(f"--- [天象计算] 开始为事件 '{event_type_prefix}' 在日期 {target_date_override} 批处理计算地理区域 ---")
     astronomy_service = AstronomyService()
     event_type = "sunrise" if "sunrise" in event_type_prefix else "sunset"
@@ -138,7 +138,6 @@ def calculate_historical_composite_score(target_date: date, event_type: str, tim
         
         high_cloud, medium_cloud, cloud_base_height = ds_at_time.get('hcc'), ds_at_time.get('mcc'), ds_at_time.get('cbh')
         
-        # --- 关键逻辑修复 ---
         if high_cloud is None or medium_cloud is None or cloud_base_height is None:
             logger.error(f"数据在时间点 {time_str} 不完整，跳过。")
             continue
@@ -148,12 +147,10 @@ def calculate_historical_composite_score(target_date: date, event_type: str, tim
             
         factor_a = xr.apply_ufunc(score_local_clouds, high_cloud, medium_cloud, vectorize=True)
         
-        # 如果 cbh 全部是 NaN，说明数据缺失，此时云高因子应为中性值
         if np.all(np.isnan(cloud_base_height.values)):
             logger.warning(f"  > 在时间点 {time_str}，Cloud Base Height (cbh) 数据全部为NaN。将云高因子设为中性值0.7。")
-            factor_d = 0.7 
+            factor_d = xr.full_like(cloud_base_height, 0.7, dtype=float)
         else:
-            # 否则，正常计算，但要处理单个的NaN值
             factor_d = xr.apply_ufunc(score_cloud_altitude, cloud_base_height, vectorize=True)
 
         score = factor_a * factor_d * 10
@@ -180,6 +177,7 @@ def calculate_historical_composite_score(target_date: date, event_type: str, tim
         lons_180 = np.where(lons > 180, lons - 360, lons)
         is_inside = contains(event_polygon, points(lons_180, lats))
         mask.values = is_inside
+        final_score = final_score.where(mask)
         logger.info("已使用天象事件地理区域对分数进行裁剪。")
     final_score = final_score.fillna(0)
     final_score.name = "chromasky_score_historical"
@@ -205,11 +203,16 @@ def main():
                 output_dir = Path("historical_maps"); output_dir.mkdir(exist_ok=True)
                 filename = f"{target_d.strftime('%Y%m%d')}_{event_type_str}_{source_name}.png"
                 output_file_path = output_dir / filename
-                mid_time_str = time_suffixes_to_run[len(time_suffixes_to_run)//2]
-                rep_dt = datetime.fromisoformat(f"{target_d.isoformat()}T{mid_time_str[:2]}:{mid_time_str[2:]}:00")
-                score_grid = score_grid.assign_coords(datetime_for_title=pd.to_datetime(rep_dt))
-                map_title = f"Historical - {event_type_str.title()} ({source_name.upper()})"
-                draw_map(score_grid, map_title, output_file_path)
+                
+                # 为地图构建一个有意义的标题
+                map_title = f"Historical Score: {event_type_str.title()} ({source_name.upper()})\nDate: {target_d.isoformat()}"
+                
+                # --- 关键修改：调用新的绘图函数 ---
+                generate_map_from_grid(
+                    score_grid=score_grid,
+                    title=map_title,
+                    output_path=output_file_path,
+                )
             else:
                 logger.error(f"无法为数据源 '{source_name}' 计算分数网格，跳过制图。")
         except Exception as e:
