@@ -1,5 +1,9 @@
 grib_data
 map_images
+historical_data
+historical_maps
+map_data
+debug_maps
 ai/project_context.txt
 .DS_Store
 __pycache__

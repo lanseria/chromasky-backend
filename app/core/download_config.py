@@ -8,8 +8,15 @@ LOCAL_LAT = 29.910
 LOCAL_LON = 122.190
 
 # 限制天文计算和指数计算的纬度范围（不影响数据下载）
-CALCULATION_LAT_TOP = 55.0
+CALCULATION_LAT_TOP = 54.0
 CALCULATION_LAT_BOTTOM = 0.0
+
+CDS_AREA_EXTRACTION = {
+    "north": 54.00,
+    "south": 0.00,
+    "west": 70.00,
+    "east": 135.00,
+}
 
 # 定义计算密度
 class MapDensity(str, Enum):

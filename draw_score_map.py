@@ -46,15 +46,26 @@ def clean_dataset_coords(ds: xr.Dataset, name: str) -> xr.Dataset:
                 ds_cleaned = ds_cleaned.isel({dim: index})
     return ds_cleaned
 
-def get_event_polygon_for_batch(event_type_prefix: str, time_list: List[str]) -> Polygon | None:
+def get_event_polygon_for_batch(
+    event_type_prefix: str, 
+    time_list: List[str],
+    target_date_override: date | None = None  # <--- 新增可选参数
+) -> Polygon | None:
     """为一批时间点计算合并后的地理区域"""
     logger.info(f"--- [天象计算] 开始为事件 '{event_type_prefix}' 批处理计算地理区域 ---")
     astronomy_service = AstronomyService()
     
-    today = date.today()
+    # --- 关键修改：根据是否有日期覆盖来决定目标日期 ---
+    if target_date_override:
+        today = target_date_override
+    else:
+        today = date.today()
+    
     tomorrow = today + timedelta(days=1)
     
     event_type = "sunrise" if "sunrise" in event_type_prefix else "sunset"
+    
+    # 这里的逻辑保持不变，但依赖的 `today` 和 `tomorrow` 已经变了
     target_d = tomorrow if "tomorrow" in event_type_prefix else today
     
     all_polygons = []

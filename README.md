@@ -150,6 +150,13 @@ python scheduler.py
 
 生成的图片会保存在项目根目录下的 `map_images/` 文件夹中。
 
+```
+python download_historical_data.py 2025-07-19
+python draw_historical_map.py 2025-07-19 sunrise
+python -m tools.download_map_data
+python -m tools.map_drawer
+```
+
 ## 📝 未来计划
 
 - [ ] 将地图生成任务 (`draw_score_map.py`) 集成到 `scheduler.py` 的自动化流程中。
