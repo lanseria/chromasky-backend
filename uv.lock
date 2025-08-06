@@ -225,6 +225,7 @@ dependencies = [
     { name = "cdsapi" },
     { name = "cfgrib" },
     { name = "dask" },
+    { name = "ecmwf-api-client" },
     { name = "ephem" },
     { name = "fastapi" },
     { name = "matplotlib" },
@@ -247,6 +248,7 @@ requires-dist = [
     { name = "cdsapi", specifier = ">=0.7.6" },
     { name = "cfgrib", specifier = ">=0.9.15.0" },
     { name = "dask", specifier = ">=2025.7.0" },
+    { name = "ecmwf-api-client", specifier = ">=1.6.5" },
     { name = "ephem", specifier = ">=4.2" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "matplotlib", specifier = ">=3.10.5" },
@@ -431,6 +433,15 @@ wheels = [
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/09/b4/ca9f5f4927e6aa515981c28582a3215ece22bb80ec622f735f12ba1cbe17/eckitlib-1.31.4-cp313-cp313-macosx_13_0_arm64.whl", hash = "sha256:d0a5ece7e9bf88996c2992c3eeec27bf47a7ce67dfd788b568e75a89d76977c3", size = 2952707, upload-time = "2025-07-24T22:00:36.953Z" },
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/1d/e5/963843d9d8550de5fbd18beb715b8355bd74631e9c20d85981ea1a0c8e59/eckitlib-1.31.4-cp313-cp313-macosx_13_0_x86_64.whl", hash = "sha256:500f44074dc0c0cfb27f7b57c2b05ec52878c4f2410ec5927c7209652bc8654f", size = 3058949, upload-time = "2025-07-24T21:57:11.575Z" },
     { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/66/20/6fcbcb74dd6b6832bd5a08ee0db7f35ca0cdfc901047052959bfb27fbc9e/eckitlib-1.31.4-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:57a2943cf5e0c51489f8a47383a0838ed88039eacd02cc251618b71acd7ca612", size = 45166258, upload-time = "2025-07-25T08:28:08.451Z" },
+]
+
+[[package]]
+name = "ecmwf-api-client"
+version = "1.6.5"
+source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" }
+sdist = { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/14/b5/837fa2daee28118c592cd003b910433894008d5a1f9e3bed9f2c3cabe34b/ecmwf_api_client-1.6.5.tar.gz", hash = "sha256:1fc0eba27163686b7fba5da027cc5dc0a361f75b652508fa7805f50599368b1c", size = 12974, upload-time = "2025-03-10T10:27:25.057Z" }
+wheels = [
+    { url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/packages/f5/f3/7a5832d5fb8e16db4d1f3be58fcb2537e68ccffea1270bff8b65de7c85b5/ecmwf_api_client-1.6.5-py3-none-any.whl", hash = "sha256:82678c2c18083b44be74b23e2a7e82d2343061966c0bf3a895272b9e9a802836", size = 13495, upload-time = "2025-03-10T10:27:24.215Z" },
 ]
 
 [[package]]
