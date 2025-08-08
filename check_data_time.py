@@ -42,5 +42,5 @@ if __name__ == "__main__":
     inspect_netcdf_time(era5_file)
 
     # 检查 CAMS AOD 数据
-    cams_file = Path("forecast_data") / args.date / "cams" / "cams_aod_data.nc"
-    inspect_netcdf_time(cams_file)
+    # cams_file = Path("forecast_data") / args.date / "cams" / "cams_aod_data.nc"
+    # inspect_netcdf_time(cams_file)
